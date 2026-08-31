@@ -3,7 +3,8 @@ import { useState, useEffect, useMemo } from "react";
 import {
   Wrench, Phone, MapPin, Clock, User, Plus, X, Check,
   AlertTriangle, Search, Loader2, ClipboardList,
-  Snowflake, PackageSearch, Users, PhoneCall, LogOut
+  Snowflake, PackageSearch, Users, PhoneCall, LogOut, FileText,
+  Pencil, Link2, DollarSign, TrendingUp, CalendarCheck
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 
@@ -44,6 +45,13 @@ function daysSince(iso) {
   return Math.max(0, Math.floor(diff / 86400000));
 }
 
+function visitCostTotal(v) {
+  return (v.costItems || []).reduce((s, ci) => s + (Number(ci.amount) || 0), 0);
+}
+function orderCostTotal(o) {
+  return (o.visits || []).reduce((s, v) => s + visitCostTotal(v), 0);
+}
+
 // ---- Supabase <-> 前端字段映射 ----
 function orderFromDb(row) {
   return {
@@ -54,11 +62,15 @@ function orderFromDb(row) {
     contactName: row.contact_name,
     contactPhone: row.contact_phone,
     issueDesc: row.issue_desc,
+    address: row.address,
+    notes: row.notes,
     reportTime: row.report_time,
     status: row.status,
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    relatedOrderId: row.related_order_id,
+    assignedTechnicianId: row.assigned_technician_id,
     visits: (row.visits || [])
       .map(visitFromDb)
       .sort((a, b) => new Date(a.visitTime) - new Date(b.visitTime)),
@@ -73,6 +85,7 @@ function visitFromDb(row) {
     masterPhone: row.master_phone,
     resultType: row.result_type,
     note: row.note,
+    costItems: row.cost_items || [],
     createdBy: row.created_by,
     createdAt: row.created_at,
   };
@@ -80,6 +93,8 @@ function visitFromDb(row) {
 
 export default function OrderTracker({ userEmail, onSignOut }) {
   const [orders, setOrders] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
+  const [feePresets, setFeePresets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -90,6 +105,8 @@ export default function OrderTracker({ userEmail, onSignOut }) {
 
   useEffect(() => {
     fetchOrders();
+    fetchTechnicians();
+    fetchFeePresets();
   }, []);
 
   async function fetchOrders() {
@@ -109,6 +126,78 @@ export default function OrderTracker({ userEmail, onSignOut }) {
     }
   }
 
+  async function fetchTechnicians() {
+    try {
+      const { data, error } = await supabase.from("technicians").select("*").order("name");
+      if (error) throw error;
+      setTechnicians(data || []);
+    } catch (e) {
+      // 静默失败即可，不影响主流程；用户可以在 UI 里重试添加
+    }
+  }
+
+  async function fetchFeePresets() {
+    try {
+      const { data, error } = await supabase.from("fee_presets").select("*").order("created_at");
+      if (error) throw error;
+      setFeePresets(data || []);
+    } catch (e) {
+      // 同上
+    }
+  }
+
+  async function addTechnician(name, phone) {
+    try {
+      const { data, error } = await supabase
+        .from("technicians")
+        .insert({ name, phone: phone || null })
+        .select()
+        .single();
+      if (error) throw error;
+      setTechnicians((prev) => [...prev, data].sort((a, b) => a.name.localeCompare(b.name)));
+      return data;
+    } catch (e) {
+      setErrorMsg("添加师傅失败：" + (e.message || "未知错误"));
+      return null;
+    }
+  }
+
+  async function addFeePreset(label, amount) {
+    try {
+      const { data, error } = await supabase
+        .from("fee_presets")
+        .insert({ label, amount })
+        .select()
+        .single();
+      if (error) throw error;
+      setFeePresets((prev) => [...prev, data]);
+      return data;
+    } catch (e) {
+      setErrorMsg("添加费用项目失败：" + (e.message || "未知错误"));
+      return null;
+    }
+  }
+
+  async function updateFeePreset(id, patch) {
+    try {
+      const { error } = await supabase.from("fee_presets").update(patch).eq("id", id);
+      if (error) throw error;
+      setFeePresets((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+    } catch (e) {
+      setErrorMsg("修改费用项目失败：" + (e.message || "未知错误"));
+    }
+  }
+
+  async function deleteFeePreset(id) {
+    try {
+      const { error } = await supabase.from("fee_presets").delete().eq("id", id);
+      if (error) throw error;
+      setFeePresets((prev) => prev.filter((p) => p.id !== id));
+    } catch (e) {
+      setErrorMsg("删除费用项目失败：" + (e.message || "未知错误"));
+    }
+  }
+
   async function addOrder(data) {
     try {
       const { count } = await supabase
@@ -124,9 +213,12 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           contact_name: data.contactName || null,
           contact_phone: data.contactPhone || null,
           issue_desc: data.issueDesc,
+          address: data.address || null,
+          notes: data.notes || null,
           report_time: data.reportTime,
           status: "待核实",
           created_by: userEmail,
+          related_order_id: data.relatedOrderId || null,
         })
         .select()
         .single();
@@ -149,11 +241,27 @@ export default function OrderTracker({ userEmail, onSignOut }) {
         .eq("id", orderId);
       if (error) throw error;
       setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status } : o))
+        prev.map((o) => (o.id === orderId ? { ...o, status, updatedAt: new Date().toISOString() } : o))
       );
       setErrorMsg("");
     } catch (e) {
       setErrorMsg("更新状态失败：" + (e.message || "未知错误"));
+    }
+  }
+
+  async function assignTechnician(orderId, technicianId) {
+    try {
+      const { error } = await supabase
+        .from("orders")
+        .update({ assigned_technician_id: technicianId, updated_at: new Date().toISOString() })
+        .eq("id", orderId);
+      if (error) throw error;
+      setOrders((prev) =>
+        prev.map((o) => (o.id === orderId ? { ...o, assignedTechnicianId: technicianId } : o))
+      );
+      setErrorMsg("");
+    } catch (e) {
+      setErrorMsg("指派师傅失败：" + (e.message || "未知错误"));
     }
   }
 
@@ -168,6 +276,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           master_phone: visit.masterPhone || null,
           result_type: visit.resultType,
           note: visit.note || null,
+          cost_items: visit.costItems || [],
           created_by: userEmail,
         })
         .select()
@@ -189,7 +298,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
-            ? { ...o, status: nextStatus, visits: [...o.visits, newVisit] }
+            ? { ...o, status: nextStatus, updatedAt: new Date().toISOString(), visits: [...o.visits, newVisit] }
             : o
         )
       );
@@ -216,6 +325,27 @@ export default function OrderTracker({ userEmail, onSignOut }) {
     const c = { all: orders.length };
     STATUSES.forEach((s) => (c[s] = orders.filter((o) => o.status === s).length));
     return c;
+  }, [orders]);
+
+  const stats = useMemo(() => {
+    const now = new Date();
+    const inProgress = orders.filter((o) => o.status === "维修中").length;
+    const completedThisMonth = orders.filter((o) => {
+      if (o.status !== "已完成") return false;
+      const d = new Date(o.updatedAt);
+      return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+    }).length;
+    const costThisMonth = orders.reduce((sum, o) => {
+      const visitSum = o.visits.reduce((s, v) => {
+        const d = new Date(v.visitTime);
+        if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth()) {
+          return s + visitCostTotal(v);
+        }
+        return s;
+      }, 0);
+      return sum + visitSum;
+    }, 0);
+    return { inProgress, completedThisMonth, costThisMonth };
   }, [orders]);
 
   const selected = orders.find((o) => o.id === selectedId) || null;
@@ -251,6 +381,36 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           <AlertTriangle size={14} /> {errorMsg}
         </div>
       )}
+
+      <div style={styles.statsBar}>
+        <div style={{ ...styles.statCard, borderColor: "#1F7A8C40" }}>
+          <div style={{ ...styles.statIconWrap, background: "#E3F0F1" }}>
+            <TrendingUp size={15} color="#1F7A8C" />
+          </div>
+          <div>
+            <div style={styles.statNum}>{stats.inProgress}</div>
+            <div style={styles.statLabel}>进行中</div>
+          </div>
+        </div>
+        <div style={{ ...styles.statCard, borderColor: "#3E8F6340" }}>
+          <div style={{ ...styles.statIconWrap, background: "#E4F3E9" }}>
+            <CalendarCheck size={15} color="#3E8F63" />
+          </div>
+          <div>
+            <div style={styles.statNum}>{stats.completedThisMonth}</div>
+            <div style={styles.statLabel}>本月已完成</div>
+          </div>
+        </div>
+        <div style={{ ...styles.statCard, borderColor: "#E08E3340" }}>
+          <div style={{ ...styles.statIconWrap, background: "#FBEEDD" }}>
+            <DollarSign size={15} color="#E08E33" />
+          </div>
+          <div>
+            <div style={styles.statNum}>¥{stats.costThisMonth.toLocaleString()}</div>
+            <div style={styles.statLabel}>本月费用</div>
+          </div>
+        </div>
+      </div>
 
       <div style={styles.filterBar}>
         <div style={styles.tabs}>
@@ -298,7 +458,12 @@ export default function OrderTracker({ userEmail, onSignOut }) {
         ) : (
           <div style={styles.grid}>
             {filtered.map((o) => (
-              <OrderCard key={o.id} order={o} onClick={() => setSelectedId(o.id)} />
+              <OrderCard
+                key={o.id}
+                order={o}
+                technicians={technicians}
+                onClick={() => setSelectedId(o.id)}
+              />
             ))}
           </div>
         )}
@@ -307,11 +472,23 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       {selected && (
         <DetailPanel
           order={selected}
+          orders={orders}
+          technicians={technicians}
+          feePresets={feePresets}
           onClose={() => {
             setSelectedId(null);
             setShowVisitForm(false);
           }}
+          onNavigateToOrder={(id) => {
+            setSelectedId(id);
+            setShowVisitForm(false);
+          }}
           onUpdateStatus={(status) => updateStatus(selected.id, status)}
+          onAssignTechnician={(techId) => assignTechnician(selected.id, techId)}
+          onAddTechnician={addTechnician}
+          onAddFeePreset={addFeePreset}
+          onUpdateFeePreset={updateFeePreset}
+          onDeleteFeePreset={deleteFeePreset}
           showVisitForm={showVisitForm}
           onOpenVisitForm={() => setShowVisitForm(true)}
           onCancelVisitForm={() => setShowVisitForm(false)}
@@ -320,7 +497,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       )}
 
       {showNewOrder && (
-        <NewOrderModal onClose={() => setShowNewOrder(false)} onSubmit={addOrder} />
+        <NewOrderModal onClose={() => setShowNewOrder(false)} onSubmit={addOrder} orders={orders} />
       )}
 
       <div style={styles.footer}>
@@ -330,10 +507,12 @@ export default function OrderTracker({ userEmail, onSignOut }) {
   );
 }
 
-function OrderCard({ order, onClick }) {
+function OrderCard({ order, technicians, onClick }) {
   const st = STATUS_STYLE[order.status];
   const lastVisit = order.visits[order.visits.length - 1];
   const d = daysSince(order.reportTime);
+  const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
+  const cost = orderCostTotal(order);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -359,6 +538,20 @@ function OrderCard({ order, onClick }) {
           </span>
         )}
       </div>
+      {(tech || cost > 0) && (
+        <div style={styles.cardMetaRow}>
+          {tech && (
+            <span style={styles.cardMeta}>
+              <Users size={12} /> 指派：{tech.name}
+            </span>
+          )}
+          {cost > 0 && (
+            <span style={{ ...styles.cardMeta, color: "#A5661A" }}>
+              <DollarSign size={12} /> ¥{cost}
+            </span>
+          )}
+        </div>
+      )}
       {lastVisit && (
         <div style={styles.lastVisitRow}>
           {(() => {
@@ -378,15 +571,92 @@ function OrderCard({ order, onClick }) {
   );
 }
 
+function TechnicianPicker({ technicians, valueId, onSelect, onAddTechnician, compact }) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newPhone, setNewPhone] = useState("");
+
+  if (adding) {
+    return (
+      <div style={styles.techAddRow}>
+        <input
+          style={styles.input}
+          placeholder="师傅姓名"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          autoFocus
+        />
+        <input
+          style={styles.input}
+          placeholder="电话（选填）"
+          value={newPhone}
+          onChange={(e) => setNewPhone(e.target.value)}
+        />
+        <button
+          style={styles.smallPrimaryBtn}
+          onClick={async () => {
+            if (!newName.trim()) return;
+            const t = await onAddTechnician(newName.trim(), newPhone.trim());
+            if (t) {
+              onSelect(t);
+              setAdding(false);
+              setNewName("");
+              setNewPhone("");
+            }
+          }}
+        >
+          保存
+        </button>
+        <button style={styles.ghostBtn} onClick={() => setAdding(false)}>
+          取消
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <select
+      style={styles.input}
+      value={valueId || ""}
+      onChange={(e) => {
+        if (e.target.value === "__add__") {
+          setAdding(true);
+          return;
+        }
+        const t = technicians.find((t) => t.id === e.target.value);
+        onSelect(t || null);
+      }}
+    >
+      <option value="">{compact ? "未指定" : "选择师傅…"}</option>
+      {technicians.map((t) => (
+        <option key={t.id} value={t.id}>
+          {t.name}
+        </option>
+      ))}
+      <option value="__add__">+ 添加新师傅</option>
+    </select>
+  );
+}
+
 function DetailPanel({
-  order, onClose, onUpdateStatus, showVisitForm, onOpenVisitForm, onCancelVisitForm, onAddVisit,
+  order, orders, technicians, feePresets,
+  onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
+  onAddFeePreset, onUpdateFeePreset, onDeleteFeePreset,
+  showVisitForm, onOpenVisitForm, onCancelVisitForm, onAddVisit,
 }) {
+  const relatedOrder = order.relatedOrderId ? orders.find((o) => o.id === order.relatedOrderId) : null;
+  const assignedTech = technicians.find((t) => t.id === order.assignedTechnicianId);
+  const totalCost = orderCostTotal(order);
+
   return (
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
         <div style={styles.panelHeader}>
           <div>
-            <div style={styles.ticketNoLg}>{order.ticketNo}</div>
+            <div style={styles.ticketNoLg}>
+              {order.ticketNo}
+              {totalCost > 0 && <span style={styles.panelCostBadge}>累计费用 ¥{totalCost}</span>}
+            </div>
             <div style={styles.panelMall}>{order.mall}</div>
           </div>
           <button style={styles.iconBtn} onClick={onClose}>
@@ -395,6 +665,12 @@ function DetailPanel({
         </div>
 
         <div style={styles.panelBody} className="scrollbar">
+          {relatedOrder && (
+            <button style={styles.relatedLinkChip} onClick={() => onNavigateToOrder(relatedOrder.id)}>
+              <Link2 size={12} /> 关联工单：{relatedOrder.ticketNo} · {relatedOrder.mall}
+            </button>
+          )}
+
           <div style={styles.infoGrid}>
             <InfoItem icon={MapPin} label="门店/商场" value={order.mall} />
             {order.brand && <InfoItem icon={Wrench} label="品牌方" value={order.brand} />}
@@ -402,11 +678,46 @@ function DetailPanel({
             <InfoItem icon={Phone} label="联系电话" value={order.contactPhone || "—"} />
             <InfoItem icon={Clock} label="报修时间" value={fmtDate(order.reportTime)} />
             <InfoItem icon={User} label="登记人" value={order.createdBy || "—"} />
+            {order.address && (
+              <div style={{ ...styles.infoItem, gridColumn: "1 / -1" }}>
+                <div style={styles.infoLabel}>
+                  <MapPin size={12} /> 详细地址
+                </div>
+                <div style={styles.infoValue}>{order.address}</div>
+              </div>
+            )}
           </div>
 
           <div style={styles.issueBox}>
             <div style={styles.sectionLabel}>故障描述</div>
             <div style={styles.issueText}>{order.issueDesc}</div>
+          </div>
+
+          {order.notes && (
+            <div style={{ ...styles.issueBox, background: "#FBF8EE", borderColor: "#EBDFB0" }}>
+              <div style={styles.sectionLabel}>
+                <FileText size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
+                历史备注
+              </div>
+              <div style={styles.issueText}>{order.notes}</div>
+            </div>
+          )}
+
+          <div style={styles.statusRow}>
+            <div style={styles.sectionLabel}>指派师傅</div>
+            <TechnicianPicker
+              technicians={technicians}
+              valueId={order.assignedTechnicianId}
+              onSelect={(t) => onAssignTechnician(t ? t.id : null)}
+              onAddTechnician={onAddTechnician}
+              compact
+            />
+            {assignedTech?.phone && (
+              <div style={{ fontSize: 11.5, color: "#8FA1A8", marginTop: 5 }}>
+                <Phone size={11} style={{ verticalAlign: -1, marginRight: 3 }} />
+                {assignedTech.phone}
+              </div>
+            )}
           </div>
 
           <div style={styles.statusRow}>
@@ -439,7 +750,18 @@ function DetailPanel({
               )}
             </div>
 
-            {showVisitForm && <VisitForm onCancel={onCancelVisitForm} onSubmit={onAddVisit} />}
+            {showVisitForm && (
+              <VisitForm
+                onCancel={onCancelVisitForm}
+                onSubmit={onAddVisit}
+                technicians={technicians}
+                onAddTechnician={onAddTechnician}
+                feePresets={feePresets}
+                onAddFeePreset={onAddFeePreset}
+                onUpdateFeePreset={onUpdateFeePreset}
+                onDeleteFeePreset={onDeleteFeePreset}
+              />
+            )}
 
             {order.visits.length === 0 && !showVisitForm ? (
               <div style={styles.emptyVisits}>还没有上门记录</div>
@@ -448,6 +770,7 @@ function DetailPanel({
                 {order.visits.map((v, idx) => {
                   const m = resultMeta(v.resultType);
                   const Icon = m.icon;
+                  const vCost = visitCostTotal(v);
                   return (
                     <div key={v.id} style={styles.timelineItem}>
                       <div style={styles.timelineRail}>
@@ -468,6 +791,16 @@ function DetailPanel({
                           {v.masterPhone ? ` · ${v.masterPhone}` : ""}
                         </div>
                         {v.note && <div style={styles.timelineNote}>{v.note}</div>}
+                        {v.costItems && v.costItems.length > 0 && (
+                          <div style={styles.visitCostRow}>
+                            {v.costItems.map((ci, i) => (
+                              <span key={i} style={styles.visitCostChip}>
+                                {ci.label} ¥{ci.amount}
+                              </span>
+                            ))}
+                            <span style={styles.visitCostTotalTag}>合计 ¥{vCost}</span>
+                          </div>
+                        )}
                         <div style={styles.timelineBy}>登记人：{v.createdBy || "—"}</div>
                       </div>
                     </div>
@@ -493,8 +826,136 @@ function InfoItem({ icon: Icon, label, value }) {
   );
 }
 
-function VisitForm({ onCancel, onSubmit }) {
-  const [master, setMaster] = useState("");
+function FeeItemsEditor({ feePresets, items, onChange, onAddPreset, onUpdatePreset, onDeletePreset }) {
+  const [customLabel, setCustomLabel] = useState("");
+  const [customAmount, setCustomAmount] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editAmount, setEditAmount] = useState("");
+
+  function addItem(label, amount) {
+    onChange([...items, { label, amount: Number(amount) || 0 }]);
+  }
+  function removeItem(idx) {
+    onChange(items.filter((_, i) => i !== idx));
+  }
+  function updateItemAmount(idx, amount) {
+    onChange(items.map((it, i) => (i === idx ? { ...it, amount: Number(amount) || 0 } : it)));
+  }
+
+  const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+
+  return (
+    <div>
+      {feePresets.length > 0 && (
+        <div style={styles.feePresetRow}>
+          {feePresets.map((p) =>
+            editingId === p.id ? (
+              <span key={p.id} style={styles.feePresetEditChip}>
+                <input
+                  style={styles.feeEditInput}
+                  value={editLabel}
+                  onChange={(e) => setEditLabel(e.target.value)}
+                />
+                <input
+                  style={{ ...styles.feeEditInput, width: 46 }}
+                  type="number"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                />
+                <button
+                  style={styles.tinyIconBtn}
+                  onClick={() => {
+                    onUpdatePreset(p.id, { label: editLabel.trim() || p.label, amount: Number(editAmount) || 0 });
+                    setEditingId(null);
+                  }}
+                >
+                  <Check size={11} />
+                </button>
+                <button style={styles.tinyIconBtn} onClick={() => setEditingId(null)}>
+                  <X size={11} />
+                </button>
+              </span>
+            ) : (
+              <span key={p.id} style={styles.feePresetChip}>
+                <button style={styles.feePresetChipBtn} onClick={() => addItem(p.label, p.amount)}>
+                  {p.label} ¥{p.amount}
+                </button>
+                <button
+                  style={styles.tinyIconBtn}
+                  onClick={() => {
+                    setEditingId(p.id);
+                    setEditLabel(p.label);
+                    setEditAmount(String(p.amount));
+                  }}
+                  title="编辑"
+                >
+                  <Pencil size={10} />
+                </button>
+                <button style={styles.tinyIconBtn} onClick={() => onDeletePreset(p.id)} title="删除">
+                  <X size={10} />
+                </button>
+              </span>
+            )
+          )}
+        </div>
+      )}
+      <div style={styles.feeCustomRow}>
+        <input
+          style={styles.input}
+          placeholder="自定义项目，如：清洗"
+          value={customLabel}
+          onChange={(e) => setCustomLabel(e.target.value)}
+        />
+        <input
+          style={{ ...styles.input, width: 90 }}
+          type="number"
+          placeholder="金额"
+          value={customAmount}
+          onChange={(e) => setCustomAmount(e.target.value)}
+        />
+        <button
+          style={styles.smallPrimaryBtn}
+          onClick={async () => {
+            if (!customLabel.trim()) return;
+            addItem(customLabel.trim(), customAmount);
+            await onAddPreset(customLabel.trim(), Number(customAmount) || 0);
+            setCustomLabel("");
+            setCustomAmount("");
+          }}
+        >
+          <Plus size={12} /> 添加
+        </button>
+      </div>
+      {items.length > 0 && (
+        <div style={styles.feeItemsList}>
+          {items.map((it, idx) => (
+            <div key={idx} style={styles.feeItemRow}>
+              <span style={{ flex: 1 }}>{it.label}</span>
+              <span style={{ marginRight: 2 }}>¥</span>
+              <input
+                style={styles.feeAmountInput}
+                type="number"
+                value={it.amount}
+                onChange={(e) => updateItemAmount(idx, e.target.value)}
+              />
+              <button style={styles.tinyIconBtn} onClick={() => removeItem(idx)}>
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+          <div style={styles.feeTotalRow}>本次上门费用合计：¥{total}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function VisitForm({
+  onCancel, onSubmit, technicians, onAddTechnician,
+  feePresets, onAddFeePreset, onUpdateFeePreset, onDeleteFeePreset,
+}) {
+  const [technician, setTechnician] = useState(null);
   const [masterPhone, setMasterPhone] = useState("");
   const [visitTime, setVisitTime] = useState(() => {
     const now = new Date();
@@ -503,30 +964,45 @@ function VisitForm({ onCancel, onSubmit }) {
   });
   const [resultType, setResultType] = useState("resolved");
   const [note, setNote] = useState("");
+  const [costItems, setCostItems] = useState([]);
   const [err, setErr] = useState("");
 
   function submit() {
-    if (!master.trim()) {
-      setErr("请填写师傅姓名");
+    if (!technician) {
+      setErr("请选择或添加师傅");
       return;
     }
     onSubmit({
-      master: master.trim(),
+      master: technician.name,
       masterPhone: masterPhone.trim(),
       visitTime: new Date(visitTime).toISOString(),
       resultType,
       note: note.trim(),
+      costItems,
     });
   }
 
   return (
     <div style={styles.visitForm}>
       <div style={styles.formRow2}>
-        <Field label="师傅姓名">
-          <input style={styles.input} value={master} onChange={(e) => setMaster(e.target.value)} placeholder="如：王师傅" />
+        <Field label="师傅">
+          <TechnicianPicker
+            technicians={technicians}
+            valueId={technician?.id}
+            onSelect={(t) => {
+              setTechnician(t);
+              setMasterPhone(t?.phone || "");
+            }}
+            onAddTechnician={onAddTechnician}
+          />
         </Field>
         <Field label="师傅电话">
-          <input style={styles.input} value={masterPhone} onChange={(e) => setMasterPhone(e.target.value)} placeholder="选填" />
+          <input
+            style={styles.input}
+            value={masterPhone}
+            onChange={(e) => setMasterPhone(e.target.value)}
+            placeholder="选填"
+          />
         </Field>
       </div>
       <Field label="上门时间">
@@ -562,6 +1038,16 @@ function VisitForm({ onCancel, onSubmit }) {
           placeholder="例如：现场检测缺氟，需联系品牌方售后补充配件"
         />
       </Field>
+      <Field label="本次费用">
+        <FeeItemsEditor
+          feePresets={feePresets}
+          items={costItems}
+          onChange={setCostItems}
+          onAddPreset={onAddFeePreset}
+          onUpdatePreset={onUpdateFeePreset}
+          onDeletePreset={onDeleteFeePreset}
+        />
+      </Field>
       {err && <div style={styles.formErr}>{err}</div>}
       <div style={styles.formActions}>
         <button style={styles.ghostBtn} onClick={onCancel}>取消</button>
@@ -580,12 +1066,16 @@ function Field({ label, children }) {
   );
 }
 
-function NewOrderModal({ onClose, onSubmit }) {
+function NewOrderModal({ onClose, onSubmit, orders }) {
   const [mall, setMall] = useState("");
   const [brand, setBrand] = useState("");
   const [contactName, setContactName] = useState("");
   const [contactPhone, setContactPhone] = useState("");
   const [issueDesc, setIssueDesc] = useState("");
+  const [address, setAddress] = useState("");
+  const [notes, setNotes] = useState("");
+  const [relatedOrder, setRelatedOrder] = useState(null);
+  const [relatedSearch, setRelatedSearch] = useState("");
   const [reportTime, setReportTime] = useState(() => {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -593,6 +1083,14 @@ function NewOrderModal({ onClose, onSubmit }) {
   });
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  const relatedResults = useMemo(() => {
+    if (!relatedSearch.trim()) return [];
+    const s = relatedSearch.trim().toLowerCase();
+    return orders
+      .filter((o) => `${o.mall} ${o.ticketNo} ${o.issueDesc}`.toLowerCase().includes(s))
+      .slice(0, 6);
+  }, [relatedSearch, orders]);
 
   async function submit() {
     if (!mall.trim() || !issueDesc.trim()) {
@@ -606,7 +1104,10 @@ function NewOrderModal({ onClose, onSubmit }) {
       contactName: contactName.trim(),
       contactPhone: contactPhone.trim(),
       issueDesc: issueDesc.trim(),
+      address: address.trim(),
+      notes: notes.trim(),
       reportTime: new Date(reportTime).toISOString(),
+      relatedOrderId: relatedOrder?.id || null,
     });
     setSubmitting(false);
   }
@@ -640,12 +1141,61 @@ function NewOrderModal({ onClose, onSubmit }) {
           <Field label="报修时间">
             <input style={styles.input} type="datetime-local" value={reportTime} onChange={(e) => setReportTime(e.target.value)} />
           </Field>
+          <Field label="详细地址（选填）">
+            <input style={styles.input} value={address} onChange={(e) => setAddress(e.target.value)} placeholder="门店完整地址，方便师傅导航" />
+          </Field>
+          <Field label="关联历史工单（选填）">
+            {relatedOrder ? (
+              <div style={styles.relatedChip}>
+                <span>{relatedOrder.ticketNo} · {relatedOrder.mall}</span>
+                <button style={styles.relatedChipRemove} onClick={() => setRelatedOrder(null)}>
+                  <X size={12} />
+                </button>
+              </div>
+            ) : (
+              <div>
+                <input
+                  style={styles.input}
+                  placeholder="搜索商场名或工单号，比如一周前洗过的那单"
+                  value={relatedSearch}
+                  onChange={(e) => setRelatedSearch(e.target.value)}
+                />
+                {relatedResults.length > 0 && (
+                  <div style={styles.relatedResultsBox}>
+                    {relatedResults.map((o) => (
+                      <button
+                        key={o.id}
+                        style={styles.relatedResultItem}
+                        onClick={() => {
+                          setRelatedOrder({ id: o.id, ticketNo: o.ticketNo, mall: o.mall });
+                          setRelatedSearch("");
+                        }}
+                      >
+                        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8FA1A8" }}>
+                          {o.ticketNo}
+                        </span>{" "}
+                        {o.mall} <span style={{ color: "#8FA1A8" }}>· {o.issueDesc.slice(0, 16)}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </Field>
           <Field label="故障描述 *">
             <textarea
               style={{ ...styles.input, minHeight: 70, resize: "vertical" }}
               value={issueDesc}
               onChange={(e) => setIssueDesc(e.target.value)}
               placeholder="如：3 楼中央空调不制冷，客人反馈室内温度偏高"
+            />
+          </Field>
+          <Field label="备注（选填）">
+            <textarea
+              style={{ ...styles.input, minHeight: 50, resize: "vertical" }}
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              placeholder="其他补充说明"
             />
           </Field>
           {err && <div style={styles.formErr}>{err}</div>}
@@ -675,6 +1225,11 @@ const styles = {
   smallPrimaryBtn: { display: "flex", alignItems: "center", gap: 5, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "6px 22px", display: "flex", alignItems: "center", gap: 6 },
+  statsBar: { display: "flex", gap: 10, padding: "14px 22px 0", background: "#FFFFFF", flexWrap: "wrap" },
+  statCard: { display: "flex", alignItems: "center", gap: 10, background: "#F9FAFA", border: "1px solid", borderRadius: 10, padding: "8px 14px", minWidth: 140 },
+  statIconWrap: { width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  statNum: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 17, lineHeight: 1.1 },
+  statLabel: { fontSize: 11, color: "#8FA1A8", marginTop: 1 },
   filterBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "12px 22px", background: "#FFFFFF", borderBottom: "1px solid #DDE6E4", flexWrap: "wrap" },
   tabs: { display: "flex", gap: 6, flexWrap: "wrap" },
   tab: { display: "flex", alignItems: "center", gap: 5, background: "#F4F7F6", border: "1px solid transparent", borderRadius: 7, padding: "6px 10px", fontSize: 12.5, color: "#4C6169", fontWeight: 500 },
@@ -699,10 +1254,12 @@ const styles = {
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 50, animation: "fadeIn .15s ease" },
   panel: { width: 440, maxWidth: "100%", background: "#F9FAFA", height: "100%", display: "flex", flexDirection: "column", animation: "slideIn .2s ease", boxShadow: "-8px 0 24px rgba(0,0,0,0.08)" },
   panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "18px 20px", background: "#fff", borderBottom: "1px solid #E2E9E8" },
-  ticketNoLg: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8FA1A8" },
+  ticketNoLg: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: "#8FA1A8", display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" },
+  panelCostBadge: { fontFamily: "'Inter', sans-serif", fontSize: 11, fontWeight: 700, color: "#A5661A", background: "#FBEEDD", padding: "2px 8px", borderRadius: 20 },
   panelMall: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 18, marginTop: 2 },
   iconBtn: { background: "#F4F7F6", border: "none", borderRadius: 8, padding: 6, display: "flex", color: "#4C6169" },
   panelBody: { flex: 1, overflowY: "auto", padding: 20 },
+  relatedLinkChip: { display: "inline-flex", alignItems: "center", gap: 5, background: "#E3F0F1", color: "#145560", border: "1px solid #1F7A8C40", borderRadius: 20, padding: "5px 11px", fontSize: 11.5, fontWeight: 600, marginBottom: 14 },
   infoGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 },
   infoItem: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 9, padding: "8px 10px" },
   infoLabel: { display: "flex", alignItems: "center", gap: 4, fontSize: 10.5, color: "#8FA1A8", marginBottom: 3 },
@@ -727,6 +1284,9 @@ const styles = {
   timelineMaster: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#4C6169", marginTop: 3 },
   timelineNote: { fontSize: 12.5, color: "#16262B", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, padding: 8, marginTop: 6, lineHeight: 1.5 },
   timelineBy: { fontSize: 10.5, color: "#B7C4C2", marginTop: 5 },
+  visitCostRow: { display: "flex", flexWrap: "wrap", gap: 5, marginTop: 6, alignItems: "center" },
+  visitCostChip: { fontSize: 11, background: "#FBEEDD", color: "#A5661A", borderRadius: 20, padding: "2px 8px", fontWeight: 600 },
+  visitCostTotalTag: { fontSize: 11, color: "#A5661A", fontWeight: 700 },
   visitForm: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 14, marginBottom: 16 },
   formRow2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
   fieldLabel: { fontSize: 11.5, fontWeight: 600, color: "#4C6169", marginBottom: 5 },
@@ -740,4 +1300,20 @@ const styles = {
   modalTitle: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16 },
   modalBody: { padding: 18, overflowY: "auto" },
   footer: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 22px", fontSize: 11.5, borderTop: "1px solid #DDE6E4", background: "#F4F7F6" },
+  techAddRow: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" },
+  relatedChip: { display: "flex", alignItems: "center", justifyContent: "space-between", background: "#E3F0F1", border: "1px solid #1F7A8C40", borderRadius: 8, padding: "8px 10px", fontSize: 12.5, color: "#145560", fontWeight: 600 },
+  relatedChipRemove: { background: "none", border: "none", color: "#145560", display: "flex" },
+  relatedResultsBox: { marginTop: 6, border: "1px solid #E2E9E8", borderRadius: 8, background: "#fff", overflow: "hidden" },
+  relatedResultItem: { display: "block", width: "100%", textAlign: "left", padding: "8px 10px", fontSize: 12, border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", color: "#16262B" },
+  feePresetRow: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  feePresetChip: { display: "flex", alignItems: "center", gap: 2, background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 20, paddingLeft: 2 },
+  feePresetChipBtn: { background: "none", border: "none", padding: "5px 8px", fontSize: 12, fontWeight: 600, color: "#16262B" },
+  feePresetEditChip: { display: "flex", alignItems: "center", gap: 3, background: "#FBF8EE", border: "1px solid #EBDFB0", borderRadius: 20, padding: "3px 6px" },
+  feeEditInput: { border: "1px solid #E2E9E8", borderRadius: 5, padding: "3px 5px", fontSize: 11, width: 64 },
+  tinyIconBtn: { background: "none", border: "none", color: "#8FA1A8", display: "flex", padding: 3 },
+  feeCustomRow: { display: "flex", gap: 6, marginBottom: 8 },
+  feeItemsList: { background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 8, padding: 8 },
+  feeItemRow: { display: "flex", alignItems: "center", gap: 4, fontSize: 12.5, padding: "4px 2px" },
+  feeAmountInput: { width: 56, border: "1px solid #E2E9E8", borderRadius: 5, padding: "3px 5px", fontSize: 12 },
+  feeTotalRow: { fontSize: 12, fontWeight: 700, color: "#A5661A", textAlign: "right", marginTop: 4, paddingTop: 6, borderTop: "1px dashed #E2E9E8" },
 };

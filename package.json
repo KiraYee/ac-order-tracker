@@ -9,10 +9,11 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "next": "14.2.5",
-    "react": "^18",
-    "react-dom": "^18",
     "@supabase/supabase-js": "^2.45.0",
-    "lucide-react": "^0.383.0"
+    "lucide-react": "^0.383.0",
+    "next": "14.2.5",
+    "pinyin-pro": "^3.29.3",
+    "react": "^18",
+    "react-dom": "^18"
   }
 }
