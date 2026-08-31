@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { pinyin } from "pinyin-pro";
+import * as XLSX from "xlsx";
 import { useSearchParams } from "next/navigation";
 import AppShell from "../components/AppShell";
 import {
@@ -36,6 +37,96 @@ function formatExpectedVisitTime(iso) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}::${String(date.getMinutes()).padStart(2, "0")}`.replace("::", ":");
 }
 
+function excelDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date;
+}
+
+function formatExcelDates(sheet, headers) {
+  if (!sheet["!ref"]) return;
+  headers.forEach((header) => {
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    let columnIndex = -1;
+    for (let col = range.s.c; col <= range.e.c; col += 1) {
+      if (sheet[XLSX.utils.encode_cell({ r: 0, c: col })]?.v === header) {
+        columnIndex = col;
+        break;
+      }
+    }
+    if (columnIndex < 0) return;
+    for (let row = 1; row <= range.e.r; row += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: columnIndex })];
+      if (cell?.v instanceof Date) {
+        cell.t = "d";
+        cell.z = "yyyy-mm-dd hh:mm";
+      }
+    }
+  });
+}
+
+function exportOrdersWorkbook(orders, technicians, clients, employees, filteredOnly) {
+  const techById = new Map(technicians.map((t) => [t.id, t]));
+  const clientById = new Map(clients.map((c) => [c.id, c.name]));
+  const employeeById = new Map(employees.map((e) => [e.id, e.name]));
+  const summary = orders.map((order) => {
+    const tech = techById.get(order.assignedTechnicianId);
+    const quoteItems = orderQuoteItems(order);
+    const quoteTotal = itemsChargeTotal(quoteItems);
+    const costTotal = itemsCostTotal(quoteItems);
+    return {
+      "工单编号": order.ticketNo || "",
+      "报修时间": excelDate(order.reportTime),
+      "城市": order.city || "",
+      "甲方": clientById.get(order.clientId) || "",
+      "品牌方": order.brand || "",
+      "故障描述": order.issueDesc || "",
+      "备注": order.notes || "",
+      "跟单人": employeeById.get(order.followerId) || "",
+      "指派师傅": tech?.name || "",
+      "师傅电话": tech?.phone || "",
+      "师傅工种": Array.isArray(tech?.skills) ? tech.skills.join("、") : "",
+      "当前状态": order.status || "",
+      "预计上门时间": excelDate(order.expectedVisitTime),
+      "是否投保": order.insuranceEnabled ? "是" : order.insuranceEnabled === false ? "否" : "",
+      "投保类型": order.insuranceType || "",
+      "投保金额": order.insuranceAmount ?? "",
+      "报价总额": quoteTotal,
+      "师傅成本总额": costTotal,
+      "利润": quoteTotal - costTotal,
+      "师傅是否结算": order.technicianSettled ? "是" : order.technicianSettled === false ? "否" : "",
+      "完成时间": order.status === "已完成" ? excelDate(order.updatedAt) : "",
+      "创建时间": excelDate(order.createdAt),
+    };
+  });
+  const details = [];
+  orders.forEach((order) => {
+    orderQuoteItems(order).forEach((item) => {
+      const charge = lineCharge(item);
+      const cost = lineCost(item);
+      details.push({
+        "工单编号": order.ticketNo || "",
+        "品牌方": order.brand || "",
+        "项目": item.label || "",
+        "数量": item.qty ?? "",
+        "收费单价": item.chargeUnit ?? "",
+        "成本单价": item.costUnit ?? "",
+        "收费小计": charge,
+        "成本小计": cost,
+        "利润": charge - cost,
+      });
+    });
+  });
+  const workbook = XLSX.utils.book_new();
+  const summarySheet = XLSX.utils.json_to_sheet(summary);
+  const detailSheet = XLSX.utils.json_to_sheet(details);
+  formatExcelDates(summarySheet, ["报修时间", "预计上门时间", "完成时间", "创建时间"]);
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "工单总表");
+  XLSX.utils.book_append_sheet(workbook, detailSheet, "报价明细");
+  const date = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(workbook, `工单导出${filteredOnly ? "_当前筛选" : ""}_${date}.xlsx`);
+}
+
 export default function OrdersPage() {
   return (
     <AppShell active="orders">
@@ -59,6 +150,7 @@ function OrdersView({ userEmail }) {
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
   const [visitFormMode, setVisitFormMode] = useState(null);
   const searchParams = useSearchParams();
 
@@ -446,9 +538,26 @@ function OrdersView({ userEmail }) {
           <div style={styles.title}>工单</div>
           <div style={styles.subtitle}>按报修时间从近到远排列</div>
         </div>
-        <button style={styles.primaryBtn} onClick={() => setShowNewOrder(true)}>
-          <Plus size={16} /> 新建工单
-        </button>
+        <div style={styles.headerActions}>
+          <div style={styles.exportWrap}>
+            <button style={styles.exportBtn} onClick={() => setShowExportMenu((prev) => !prev)}>
+              导出 Excel
+            </button>
+            {showExportMenu && (
+              <div style={styles.exportMenu}>
+                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(filtered, technicians, clients, employees, true); setShowExportMenu(false); }}>
+                  导出当前筛选结果
+                </button>
+                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(orders, technicians, clients, employees, false); setShowExportMenu(false); }}>
+                  导出全部工单
+                </button>
+              </div>
+            )}
+          </div>
+          <button style={styles.primaryBtn} onClick={() => setShowNewOrder(true)}>
+            <Plus size={16} /> 新建工单
+          </button>
+        </div>
       </div>
 
       {errorMsg && (
@@ -1728,6 +1837,11 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
 const styles = {
   page: { padding: "28px 32px", maxWidth: 1200 },
   headerRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 16 },
+  headerActions: { display: "flex", alignItems: "center", gap: 8 },
+  exportWrap: { position: "relative" },
+  exportBtn: { background: "#F4F7F6", color: "#145560", border: "1px solid #1F7A8C55", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
+  exportMenu: { position: "absolute", right: 0, top: "calc(100% + 6px)", width: 180, background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, boxShadow: "0 8px 20px rgba(18,32,36,0.12)", zIndex: 10, overflow: "hidden" },
+  exportMenuItem: { display: "block", width: "100%", padding: "9px 11px", border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", color: "#16262B", textAlign: "left", fontSize: 12 },
   title: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22 },
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },

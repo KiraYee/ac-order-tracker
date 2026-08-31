@@ -5,8 +5,35 @@ import {
   Users, Plus, X, Phone, MapPin, Loader2, Wrench, CheckCircle2, DollarSign, Pencil,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import * as XLSX from "xlsx";
 import AppShell from "../components/AppShell";
 import { orderFromDb, computeTechnicianStats, groupByCity, fmtDate, visitCostTotal, resultMeta, SKILL_PRESETS } from "../../lib/dataHelpers";
+
+function exportTechniciansWorkbook(technicians) {
+  const rows = technicians.map((technician) => ({
+    "姓名": technician.name || "",
+    "电话": technician.phone || "",
+    "城市": technician.city || "",
+    "工种": Array.isArray(technician.skills) ? technician.skills.join("、") : "",
+    "备注": technician.notes || technician.remark || "",
+    "创建时间": technician.created_at ? new Date(technician.created_at) : "",
+  }));
+  const workbook = XLSX.utils.book_new();
+  const sheet = XLSX.utils.json_to_sheet(rows);
+  if (sheet["!ref"]) {
+    const range = XLSX.utils.decode_range(sheet["!ref"]);
+    for (let row = 1; row <= range.e.r; row += 1) {
+      const cell = sheet[XLSX.utils.encode_cell({ r: row, c: 5 })];
+      if (cell?.v instanceof Date) {
+        cell.t = "d";
+        cell.z = "yyyy-mm-dd hh:mm";
+      }
+    }
+  }
+  XLSX.utils.book_append_sheet(workbook, sheet, "师傅列表");
+  const date = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(workbook, `师傅列表_${date}.xlsx`);
+}
 
 export default function TechniciansPage() {
   return (
@@ -74,9 +101,14 @@ function TechniciansView() {
           <div style={styles.title}>师傅</div>
           <div style={styles.subtitle}>按城市分组，点开查看合作数据</div>
         </div>
-        <button style={styles.primaryBtn} onClick={() => setShowNew(true)}>
-          <Plus size={16} /> 添加师傅
-        </button>
+        <div style={styles.headerActions}>
+          <button style={styles.exportBtn} onClick={() => exportTechniciansWorkbook(technicians)}>
+            导出 Excel
+          </button>
+          <button style={styles.primaryBtn} onClick={() => setShowNew(true)}>
+            <Plus size={16} /> 添加师傅
+          </button>
+        </div>
       </div>
 
       {errorMsg && <div style={styles.errorBar}>{errorMsg}</div>}
@@ -363,9 +395,11 @@ function Field({ label, children }) {
 const styles = {
   page: { padding: "28px 32px", maxWidth: 1100 },
   headerRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 },
+  headerActions: { display: "flex", alignItems: "center", gap: 8 },
   title: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22 },
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
+  exportBtn: { background: "#F4F7F6", color: "#145560", border: "1px solid #1F7A8C55", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, marginBottom: 12 },
   centerState: { display: "flex", justifyContent: "center", padding: "60px 0" },
