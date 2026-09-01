@@ -49,7 +49,7 @@ function DashboardContent() {
 
   const stats = useMemo(() => {
     const inRangeCompleted = orders.filter(
-      (o) => o.status === "已完成" && isInRange(o.updatedAt, range)
+      (o) => o.status === "已完成" && isInRange(o.completedAt, range)
     );
     const completedCount = inRangeCompleted.length;
     const completedCharge = inRangeCompleted.reduce((s, o) => s + orderChargeTotal(o), 0);

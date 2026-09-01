@@ -65,11 +65,60 @@ function formatExcelDates(sheet, headers) {
   });
 }
 
+function filterOrdersByExportDate(orders, timeType, rangeType, customStart, customEnd, monthValue) {
+  if (rangeType === "all") return orders;
+  const now = new Date();
+  let start;
+  let end;
+  if (rangeType === "today") {
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  } else if (rangeType === "this_week") {
+    const day = now.getDay() || 7;
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - day + 1);
+    end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7);
+  } else if (rangeType === "this_month") {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  } else if (rangeType === "last_month") {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    end = new Date(now.getFullYear(), now.getMonth(), 1);
+  } else if (rangeType === "this_quarter") {
+    const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3;
+    start = new Date(now.getFullYear(), quarterStartMonth, 1);
+    end = new Date(now.getFullYear(), quarterStartMonth + 3, 1);
+  } else if (rangeType === "this_year") {
+    start = new Date(now.getFullYear(), 0, 1);
+    end = new Date(now.getFullYear() + 1, 0, 1);
+  } else if (rangeType === "last_7_days") {
+    end = new Date(now.getTime() + 1);
+    start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+  } else if (rangeType === "month") {
+    start = monthValue ? new Date(`${monthValue}-01T00:00:00`) : null;
+    end = monthValue ? new Date(start.getFullYear(), start.getMonth() + 1, 1) : null;
+  } else {
+    start = customStart ? new Date(`${customStart}T00:00:00`) : null;
+    end = customEnd ? new Date(`${customEnd}T23:59:59.999`) : null;
+  }
+  if (!start || !end || Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return orders;
+  return orders.filter((order) => {
+    const value = timeType === "completed"
+      ? order.completedAt
+      : timeType === "expected"
+        ? order.expectedVisitTime
+        : order.reportTime;
+    if (!value) return false;
+    const date = new Date(value);
+    return !Number.isNaN(date.getTime()) && date >= start && date <= end;
+  });
+}
+
 function exportOrdersWorkbook(orders, technicians, clients, employees, filteredOnly) {
   const techById = new Map(technicians.map((t) => [t.id, t]));
   const clientById = new Map(clients.map((c) => [c.id, c.name]));
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
-  const summary = orders.map((order) => {
+  const exportOrders = orders;
+  const summary = exportOrders.map((order) => {
     const tech = techById.get(order.assignedTechnicianId);
     const quoteItems = orderQuoteItems(order);
     const quoteTotal = itemsChargeTotal(quoteItems);
@@ -95,12 +144,12 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, filteredO
       "师傅成本总额": costTotal,
       "利润": quoteTotal - costTotal,
       "师傅是否结算": order.technicianSettled ? "是" : order.technicianSettled === false ? "否" : "",
-      "完成时间": order.status === "已完成" ? excelDate(order.updatedAt) : "",
+      "完成时间": excelDate(order.completedAt),
       "创建时间": excelDate(order.createdAt),
     };
   });
   const details = [];
-  orders.forEach((order) => {
+  exportOrders.forEach((order) => {
     orderQuoteItems(order).forEach((item) => {
       const charge = lineCharge(item);
       const cost = lineCost(item);
@@ -151,8 +200,33 @@ function OrdersView({ userEmail }) {
   const [selectedId, setSelectedId] = useState(null);
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportTimeType, setExportTimeType] = useState("report");
+  const [exportRangeType, setExportRangeType] = useState("all");
+  const [exportStartDate, setExportStartDate] = useState("");
+  const [exportEndDate, setExportEndDate] = useState("");
+  const [exportMonth, setExportMonth] = useState("");
+  const [showTimeFilter, setShowTimeFilter] = useState(false);
+  const [draftTimeType, setDraftTimeType] = useState("report");
+  const [draftRangeType, setDraftRangeType] = useState("all");
+  const [draftStartDate, setDraftStartDate] = useState("");
+  const [draftEndDate, setDraftEndDate] = useState("");
+  const [draftMonth, setDraftMonth] = useState("");
   const [visitFormMode, setVisitFormMode] = useState(null);
   const searchParams = useSearchParams();
+
+  function clearTimeFilter() {
+    setExportTimeType("report");
+    setExportRangeType("all");
+    setExportStartDate("");
+    setExportEndDate("");
+    setExportMonth("");
+    setDraftTimeType("report");
+    setDraftRangeType("all");
+    setDraftStartDate("");
+    setDraftEndDate("");
+    setDraftMonth("");
+    setShowTimeFilter(false);
+  }
 
   useEffect(() => {
     fetchOrders();
@@ -330,6 +404,7 @@ function OrdersView({ userEmail }) {
           report_time: data.reportTime,
           expected_visit_time: data.expectedVisitTime || null,
           status: data.status || "待核实",
+          completed_at: data.status === "已完成" ? new Date().toISOString() : null,
           created_by: userEmail,
           related_order_id: data.relatedOrderId || null,
           client_id: data.clientId || null,
@@ -374,7 +449,11 @@ function OrdersView({ userEmail }) {
       setErrorMsg("进入“待上门”前，请填写预计上门时间");
       return false;
     }
-    await patchOrder(orderId, { status });
+    const patch = { status };
+    if (status === "已完成" && !order?.completedAt) {
+      patch.completedAt = new Date().toISOString();
+    }
+    await patchOrder(orderId, patch);
     return true;
   }
 
@@ -420,13 +499,26 @@ function OrdersView({ userEmail }) {
       if (visit.resultType === "resolved") nextStatus = "已完成";
       else if (nextStatus !== "已取消") nextStatus = "维修中";
 
-      await supabase.from("orders").update({ status: nextStatus, updated_at: new Date().toISOString() }).eq("id", orderId);
+      const completionPatch = {
+        status: nextStatus,
+        updated_at: new Date().toISOString(),
+      };
+      if (nextStatus === "已完成" && !order?.completedAt) {
+        completionPatch.completed_at = new Date().toISOString();
+      }
+      await supabase.from("orders").update(completionPatch).eq("id", orderId);
 
       const newVisit = visitFromDb(row);
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
-            ? { ...o, status: nextStatus, updatedAt: new Date().toISOString(), visits: [...o.visits, newVisit] }
+            ? {
+                ...o,
+                status: nextStatus,
+                completedAt: nextStatus === "已完成" && !o.completedAt ? completionPatch.completed_at : o.completedAt,
+                updatedAt: completionPatch.updated_at,
+                visits: [...o.visits, newVisit],
+              }
             : o
         )
       );
@@ -479,7 +571,7 @@ function OrdersView({ userEmail }) {
   }
 
   const filtered = useMemo(() => {
-    return orders.filter((o) => {
+    const baseFiltered = orders.filter((o) => {
       if (statusFilter !== "all" && o.status !== statusFilter) return false;
       if (followerFilter !== "all" && o.followerId !== followerFilter) return false;
       if (search.trim()) {
@@ -488,13 +580,14 @@ function OrdersView({ userEmail }) {
         if (!hay.includes(s)) return false;
       }
       return true;
-    }).sort((a, b) => {
+    });
+    return filterOrdersByExportDate(baseFiltered, exportTimeType, exportRangeType, exportStartDate, exportEndDate, exportMonth).sort((a, b) => {
       if (!a.reportTime && !b.reportTime) return 0;
       if (!a.reportTime) return 1;
       if (!b.reportTime) return -1;
       return new Date(b.reportTime).getTime() - new Date(a.reportTime).getTime();
     });
-  }, [orders, statusFilter, followerFilter, search]);
+  }, [orders, statusFilter, followerFilter, search, exportTimeType, exportRangeType, exportStartDate, exportEndDate, exportMonth]);
 
   const groupedOrders = useMemo(() => {
     const groups = new Map();
@@ -596,6 +689,65 @@ function OrdersView({ userEmail }) {
             ))}
           </select>
         </label>
+        <div style={styles.timeFilterWrap}>
+          <button
+            type="button"
+            style={styles.timeFilterButton}
+            onClick={() => {
+              setDraftTimeType(exportTimeType);
+              setDraftRangeType(exportRangeType);
+              setDraftStartDate(exportStartDate);
+              setDraftEndDate(exportEndDate);
+              setDraftMonth(exportMonth);
+              setShowTimeFilter((prev) => !prev);
+            }}
+          >
+            🕒 按时间筛选 {exportRangeType !== "all" ? "· 已启用" : "▼"}
+          </button>
+          {showTimeFilter && (
+            <div style={styles.timeFilterPanel}>
+              <label style={styles.timeFilterField}>时间类型
+                <select style={styles.filterSelect} value={draftTimeType} onChange={(e) => setDraftTimeType(e.target.value)}>
+                  <option value="report">报修时间</option>
+                  <option value="completed">完工时间</option>
+                </select>
+              </label>
+              <label style={styles.timeFilterField}>时间范围
+                <select style={styles.filterSelect} value={draftRangeType} onChange={(e) => setDraftRangeType(e.target.value)}>
+                  <option value="all">全部</option>
+                  <option value="today">今天</option>
+                  <option value="this_week">本周</option>
+                  <option value="this_month">本月</option>
+                  <option value="last_month">上月</option>
+                  <option value="this_year">今年</option>
+                  <option value="month">指定月份</option>
+                  <option value="custom">自定义时间</option>
+                </select>
+              </label>
+              {draftRangeType === "custom" && (
+                <div style={styles.exportDateRow}>
+                  <input style={styles.exportDateInput} type="date" value={draftStartDate} onChange={(e) => setDraftStartDate(e.target.value)} />
+                  <span>至</span>
+                  <input style={styles.exportDateInput} type="date" value={draftEndDate} onChange={(e) => setDraftEndDate(e.target.value)} />
+                </div>
+              )}
+              {draftRangeType === "month" && (
+                <input style={styles.exportMonthInput} type="month" value={draftMonth} onChange={(e) => setDraftMonth(e.target.value)} />
+              )}
+              <div style={styles.timeFilterActions}>
+                <button type="button" style={styles.ghostBtn} onClick={clearTimeFilter}>取消</button>
+                <button type="button" style={styles.smallPrimaryBtn} onClick={() => {
+                  setExportTimeType(draftTimeType);
+                  setExportRangeType(draftRangeType);
+                  setExportMonth(draftMonth);
+                  setExportStartDate(draftStartDate);
+                  setExportEndDate(draftEndDate);
+                  setShowTimeFilter(false);
+                }}>确定</button>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -709,6 +861,11 @@ function OrderCard({ order, technicians, clients, onClick }) {
           <Clock size={12} /> 报修 {fmtDate(order.reportTime)}
           {d !== null && d > 0 ? ` · ${d}天前` : ""}
         </span>
+        {order.completedAt && (
+          <span style={styles.completedTimeBadge}>
+            <span>⭐</span> 完工 {fmtDate(order.completedAt)}
+          </span>
+        )}
         {order.visits.length > 0 && (
           <span style={styles.cardMeta}>
             <Wrench size={12} /> 已上门 {order.visits.length} 次
@@ -934,6 +1091,7 @@ function DetailPanel({
   const [issueDesc, setIssueDesc] = useState(order.issueDesc || "");
   const [notes, setNotes] = useState(order.notes || "");
   const [expectedVisitTime, setExpectedVisitTime] = useState(() => toDateTimeLocal(order.expectedVisitTime));
+  const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
   const [inspectUrl, setInspectUrl] = useState(order.inspectionPhotoUrl || "");
   const [compareUrl, setCompareUrl] = useState(order.comparePhotoUrl || "");
@@ -949,6 +1107,7 @@ function DetailPanel({
     setIssueDesc(order.issueDesc || "");
     setNotes(order.notes || "");
     setExpectedVisitTime(toDateTimeLocal(order.expectedVisitTime));
+    setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
     setInspectUrl(order.inspectionPhotoUrl || "");
     setCompareUrl(order.comparePhotoUrl || "");
@@ -1098,12 +1257,6 @@ function DetailPanel({
                   <div style={styles.assignedTechMeta}>
                     {assignedTech.phone ? <><Phone size={11} /> {assignedTech.phone}</> : "暂无电话"}
                   </div>
-                  <div style={styles.assignedTechMeta}>
-                    工种：{assignedTech.skills?.length ? assignedTech.skills.join("、") : "暂无"}
-                  </div>
-                  <div style={styles.assignedTechMeta}>
-                    指派时间：当前数据未单独记录
-                  </div>
                 </div>
                 <TechnicianPicker
                   technicians={technicians}
@@ -1159,6 +1312,17 @@ function DetailPanel({
                   onBlur={() => onPatch({ expectedVisitTime: expectedVisitTime ? new Date(expectedVisitTime).toISOString() : null })}
                 />
                 {!order.expectedVisitTime && <div style={styles.warningHint}>⚠ 未填写预计上门时间</div>}
+              </Field>
+            )}
+            {order.status === "已完成" && (
+              <Field label="完工时间">
+                <input
+                  style={styles.input}
+                  type="datetime-local"
+                  value={completedAt}
+                  onChange={(e) => setCompletedAt(e.target.value)}
+                  onBlur={() => onPatch({ completedAt: completedAt ? new Date(completedAt).toISOString() : null })}
+                />
               </Field>
             )}
             <div style={styles.timelineSection}>
@@ -1690,8 +1854,8 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       setErr("请至少填写商场名称和故障描述");
       return;
     }
-    if (status === "待上门" && !expectedVisitTime) {
-      setErr("进入“待上门”前，请填写预计上门时间");
+    if ((status === "待派工" || status === "待上门") && !expectedVisitTime) {
+      setErr(`状态为“${status}”时，请填写预计上门时间`);
       return;
     }
     setSubmitting(true);
@@ -1780,7 +1944,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
               ))}
             </div>
           </Field>
-          {status === "待上门" && (
+          {(status === "待派工" || status === "待上门") && (
             <Field label="预计上门时间">
               <input
                 style={styles.input}
@@ -1841,7 +2005,15 @@ const styles = {
   exportWrap: { position: "relative" },
   exportBtn: { background: "#F4F7F6", color: "#145560", border: "1px solid #1F7A8C55", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
   exportMenu: { position: "absolute", right: 0, top: "calc(100% + 6px)", width: 180, background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, boxShadow: "0 8px 20px rgba(18,32,36,0.12)", zIndex: 10, overflow: "hidden" },
+  exportDateRow: { display: "flex", alignItems: "center", gap: 4, padding: "8px 10px", color: "#8FA1A8", fontSize: 11 },
+  exportDateInput: { minWidth: 0, width: 70, border: "1px solid #E2E9E8", borderRadius: 6, padding: "5px 3px", fontSize: 10 },
   exportMenuItem: { display: "block", width: "100%", padding: "9px 11px", border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", color: "#16262B", textAlign: "left", fontSize: 12 },
+  timeFilterWrap: { position: "relative" },
+  timeFilterButton: { background: "#F4F7F6", color: "#145560", border: "1px solid #1F7A8C55", borderRadius: 8, padding: "7px 10px", fontSize: 12, fontWeight: 600 },
+  timeFilterPanel: { position: "absolute", left: 0, top: "calc(100% + 6px)", width: 220, padding: 12, background: "#fff", border: "1px solid #E2E9E8", borderRadius: 9, boxShadow: "0 8px 20px rgba(18,32,36,0.12)", zIndex: 10 },
+  timeFilterField: { display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, color: "#4C6169", fontSize: 11.5, fontWeight: 600 },
+  exportMonthInput: { width: "100%", border: "1px solid #E2E9E8", borderRadius: 6, padding: "6px 7px", background: "#F4F7F6", color: "#16262B", fontSize: 12, marginBottom: 10 },
+  timeFilterActions: { display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 4 },
   title: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22 },
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
@@ -1872,6 +2044,7 @@ const styles = {
   cardBrand: { fontWeight: 400, color: "#8FA1A8", fontSize: 12.5 },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2, flexWrap: "wrap" },
+  completedTimeBadge: { display: "inline-flex", alignItems: "center", gap: 4, background: "#E4F3E9", border: "1px solid #3E8F6380", color: "#2C6B45", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },
   lastVisitRow: { display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, borderTop: "1px dashed #E2E9E8", paddingTop: 7, marginTop: 2 },
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 50, animation: "fadeIn .15s ease" },
