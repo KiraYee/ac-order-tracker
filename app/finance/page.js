@@ -2,7 +2,7 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
-  Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle,
+  Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle, Pencil,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
@@ -24,6 +24,7 @@ function FinanceView({ userEmail }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [tab, setTab] = useState("receivable"); // receivable | payable | advances
   const [showNewAdvance, setShowNewAdvance] = useState(false);
+  const [editingAdvance, setEditingAdvance] = useState(null);
 
   useEffect(() => {
     load();
@@ -85,6 +86,22 @@ function FinanceView({ userEmail }) {
       setShowNewAdvance(false);
     } catch (e) {
       setErrorMsg("添加垫付记录失败：" + (e.message || "未知错误"));
+    }
+  }
+
+  async function updateAdvance(id, data) {
+    try {
+      const { data: row, error } = await supabase
+        .from("advances")
+        .update(data)
+        .eq("id", id)
+        .select()
+        .single();
+      if (error) throw error;
+      setAdvances((prev) => prev.map((advance) => (advance.id === id ? row : advance)));
+      setEditingAdvance(null);
+    } catch (e) {
+      setErrorMsg("修改垫付记录失败：" + (e.message || "未知错误"));
     }
   }
 
@@ -242,7 +259,7 @@ function FinanceView({ userEmail }) {
       {tab === "advances" && (
         <div>
           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-            <button style={styles.primaryBtn} onClick={() => setShowNewAdvance(true)}>
+            <button style={styles.primaryBtn} onClick={() => { setEditingAdvance(null); setShowNewAdvance(true); }}>
               <Plus size={15} /> 登记垫付
             </button>
           </div>
@@ -266,6 +283,9 @@ function FinanceView({ userEmail }) {
                     </div>
                     <div style={styles.rowRight}>
                       <span style={styles.amount}>¥{a.amount}</span>
+                      <button style={styles.settleBtn} onClick={() => setEditingAdvance(a)}>
+                        <Pencil size={13} /> 编辑
+                      </button>
                       <button
                         style={{ ...styles.settleBtn, ...(a.reimbursed ? styles.settleBtnDone : {}) }}
                         onClick={() => toggleReimbursed(a)}
@@ -281,8 +301,14 @@ function FinanceView({ userEmail }) {
         </div>
       )}
 
-      {showNewAdvance && (
-        <NewAdvanceModal orders={orders} onClose={() => setShowNewAdvance(false)} onSubmit={addAdvance} />
+      {(showNewAdvance || editingAdvance) && (
+        <NewAdvanceModal
+          key={editingAdvance?.id || "new"}
+          orders={orders}
+          initial={editingAdvance}
+          onClose={() => { setShowNewAdvance(false); setEditingAdvance(null); }}
+          onSubmit={(data) => editingAdvance ? updateAdvance(editingAdvance.id, data) : addAdvance(data)}
+        />
       )}
     </div>
   );
@@ -297,12 +323,12 @@ function EmptyState({ text }) {
   );
 }
 
-function NewAdvanceModal({ orders, onClose, onSubmit }) {
-  const [employeeName, setEmployeeName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [reason, setReason] = useState("");
+function NewAdvanceModal({ orders, initial, onClose, onSubmit }) {
+  const [employeeName, setEmployeeName] = useState(initial?.employee_name || "");
+  const [amount, setAmount] = useState(initial?.amount ?? "");
+  const [reason, setReason] = useState(initial?.reason || "");
   const [orderSearch, setOrderSearch] = useState("");
-  const [relatedOrder, setRelatedOrder] = useState(null);
+  const [relatedOrder, setRelatedOrder] = useState(() => orders.find((order) => order.id === initial?.order_id) || null);
   const [err, setErr] = useState("");
 
   const results = orderSearch.trim()
@@ -326,7 +352,7 @@ function NewAdvanceModal({ orders, onClose, onSubmit }) {
     <div style={styles.overlay} onClick={onClose}>
       <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
-          <span style={styles.modalTitle}>登记垫付</span>
+          <span style={styles.modalTitle}>{initial ? "编辑垫付" : "登记垫付"}</span>
           <button style={styles.iconBtn} onClick={onClose}>
             <X size={18} />
           </button>
