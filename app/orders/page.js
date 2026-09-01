@@ -14,7 +14,7 @@ import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
   orderFromDb, visitFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge, lineCost,
-  itemsChargeTotal, itemsCostTotal, INSURANCE_TYPES,
+  itemsChargeTotal, itemsCostTotal, visitCostTotal, INSURANCE_TYPES,
   WORK_ORDER_VISIBLE_STATUSES, WORK_ORDER_STATUSES,
 } from "../../lib/dataHelpers";
 
@@ -484,10 +484,14 @@ function OrdersView({ userEmail }) {
         .insert({
           order_id: orderId,
           visit_time: visit.visitTime,
+          service_type: visit.serviceType || null,
+          service_content: visit.serviceContent || null,
           master: visit.master,
           master_phone: visit.masterPhone || null,
+          technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
+          cost_items: visit.costItems || [],
           created_by: userEmail,
         })
         .select()
@@ -535,11 +539,14 @@ function OrdersView({ userEmail }) {
         .from("visits")
         .update({
           visit_time: visit.visitTime,
+          service_type: visit.serviceType || null,
+          service_content: visit.serviceContent || null,
           master: visit.master,
           master_phone: visit.masterPhone || null,
           technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
+          cost_items: visit.costItems || [],
         })
         .eq("id", visitId);
       if (error) throw error;
@@ -735,7 +742,17 @@ function OrdersView({ userEmail }) {
                 <input style={styles.exportMonthInput} type="month" value={draftMonth} onChange={(e) => setDraftMonth(e.target.value)} />
               )}
               <div style={styles.timeFilterActions}>
-                <button type="button" style={styles.ghostBtn} onClick={clearTimeFilter}>取消</button>
+                <button
+                  type="button"
+                  style={styles.ghostBtn}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    clearTimeFilter();
+                  }}
+                >
+                  取消
+                </button>
                 <button type="button" style={styles.smallPrimaryBtn} onClick={() => {
                   setExportTimeType(draftTimeType);
                   setExportRangeType(draftRangeType);
@@ -1090,6 +1107,7 @@ function DetailPanel({
   const [address, setAddress] = useState(order.address || "");
   const [issueDesc, setIssueDesc] = useState(order.issueDesc || "");
   const [notes, setNotes] = useState(order.notes || "");
+  const [reportTime, setReportTime] = useState(() => toDateTimeLocal(order.reportTime));
   const [expectedVisitTime, setExpectedVisitTime] = useState(() => toDateTimeLocal(order.expectedVisitTime));
   const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
@@ -1106,6 +1124,7 @@ function DetailPanel({
     setAddress(order.address || "");
     setIssueDesc(order.issueDesc || "");
     setNotes(order.notes || "");
+    setReportTime(toDateTimeLocal(order.reportTime));
     setExpectedVisitTime(toDateTimeLocal(order.expectedVisitTime));
     setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
@@ -1181,6 +1200,16 @@ function DetailPanel({
               </Field>
             </div>
             <div style={styles.formRow2}>
+              <Field label="报修时间">
+                <input
+                  style={styles.input}
+                  type="datetime-local"
+                  value={reportTime}
+                  onChange={(e) => setReportTime(e.target.value)}
+                />
+              </Field>
+            </div>
+            <div style={styles.formRow2}>
               <Field label="甲方公司">
                 <NamePicker
                   items={clients}
@@ -1235,6 +1264,7 @@ function DetailPanel({
                     address: address.trim(),
                     issueDesc: issueDesc.trim(),
                     notes: notes.trim(),
+                    reportTime: reportTime ? new Date(reportTime).toISOString() : null,
                   })
                 }
               >
@@ -1356,6 +1386,7 @@ function DetailPanel({
                   {order.visits.map((v, idx) => {
                     const m = resultMeta(v.resultType);
                     const isEditing = visitFormMode && visitFormMode !== "new" && visitFormMode.id === v.id;
+                    const technicianCost = visitCostTotal(v);
                     return (
                       <div key={v.id} style={styles.timelineItem}>
                         <div style={styles.timelineRail}>
@@ -1376,6 +1407,9 @@ function DetailPanel({
                             </div>
                           </div>
                           <div style={styles.timelineMaster}><Wrench size={12} /> {v.master}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
+                          <div style={styles.serviceRecordMeta}>服务类型：{v.serviceType || "历史上门记录"}</div>
+                          {v.serviceContent && <div style={styles.serviceRecordContent}>服务内容：{v.serviceContent}</div>}
+                          {technicianCost > 0 && <div style={styles.serviceRecordCost}>师傅费用：¥{technicianCost}</div>}
                           {v.note && <div style={styles.timelineNote}>{v.note}</div>}
                           <div style={styles.timelineBy}>登记人：{v.createdBy || "—"}</div>
                         </div>
@@ -1723,6 +1757,11 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
 function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnician }) {
   const initTech = initialVisit ? technicians.find((t) => t.id === initialVisit.technicianId) : null;
   const [technician, setTechnician] = useState(initTech || null);
+  const [serviceType, setServiceType] = useState(initialVisit?.serviceType || "");
+  const [serviceContent, setServiceContent] = useState(initialVisit?.serviceContent || "");
+  const [costItems, setCostItems] = useState(() => (initialVisit?.costItems || []).map((item) => ({ ...item })));
+  const [costLabel, setCostLabel] = useState("");
+  const [costAmount, setCostAmount] = useState("");
   const [masterPhone, setMasterPhone] = useState(initialVisit?.masterPhone || "");
   const [freeMasterName, setFreeMasterName] = useState(initialVisit && !initTech ? initialVisit.master : "");
   const [visitTime, setVisitTime] = useState(() => {
@@ -1744,8 +1783,11 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
       master: masterName,
       masterPhone: masterPhone.trim(),
       technicianId: technician?.id || null,
+      serviceType: serviceType.trim(),
+      serviceContent: serviceContent.trim(),
       visitTime: new Date(visitTime).toISOString(),
       resultType,
+      costItems,
       note: note.trim(),
     });
   }
@@ -1774,8 +1816,46 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
           <input style={styles.input} value={freeMasterName} onChange={(e) => setFreeMasterName(e.target.value)} />
         </Field>
       )}
+      <Field label="服务类型">
+        <input style={styles.input} value={serviceType} onChange={(e) => setServiceType(e.target.value)} placeholder="如：上门检查 / 维修 / 复查" />
+      </Field>
+      <Field label="服务内容">
+        <textarea style={{ ...styles.input, minHeight: 60, resize: "vertical" }} value={serviceContent} onChange={(e) => setServiceContent(e.target.value)} placeholder="记录本次实际服务内容" />
+      </Field>
       <Field label="上门时间">
         <input style={styles.input} type="datetime-local" value={visitTime} onChange={(e) => setVisitTime(e.target.value)} />
+      </Field>
+      <Field label="师傅费用">
+        <div style={styles.serviceCostAddRow}>
+          <input style={{ ...styles.input, flex: 1 }} value={costLabel} onChange={(e) => setCostLabel(e.target.value)} placeholder="费用项目，如：上门费" />
+          <input style={{ ...styles.input, width: 100 }} type="number" value={costAmount} onChange={(e) => setCostAmount(e.target.value)} placeholder="金额" />
+          <button
+            type="button"
+            style={styles.smallPrimaryBtn}
+            onClick={() => {
+              if (!costLabel.trim() || costAmount === "") return;
+              setCostItems((prev) => [...prev, { label: costLabel.trim(), amount: Number(costAmount) || 0 }]);
+              setCostLabel("");
+              setCostAmount("");
+            }}
+          >
+            <Plus size={12} /> 添加
+          </button>
+        </div>
+        {costItems.length > 0 && (
+          <div style={styles.serviceCostList}>
+            {costItems.map((item, index) => (
+              <div key={`${item.label}-${index}`} style={styles.serviceCostRow}>
+                <span>{item.label}</span>
+                <span>¥{Number(item.amount) || 0}</span>
+                <button type="button" style={styles.tinyIconBtn} onClick={() => setCostItems((prev) => prev.filter((_, i) => i !== index))}>
+                  <X size={12} />
+                </button>
+              </div>
+            ))}
+            <div style={styles.serviceCostTotal}>师傅费用合计 ¥{costItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)}</div>
+          </div>
+        )}
       </Field>
       <Field label="处理结果">
         <div style={styles.resultChips}>
@@ -2093,9 +2173,16 @@ const styles = {
   timelineTop: { display: "flex", justifyContent: "space-between", alignItems: "baseline", fontSize: 12.5 },
   timelineDate: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8FA1A8" },
   timelineMaster: { display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#4C6169", marginTop: 3 },
+  serviceRecordMeta: { fontSize: 11.5, color: "#4C6169", marginTop: 5 },
+  serviceRecordContent: { fontSize: 12, color: "#16262B", lineHeight: 1.45, marginTop: 4 },
+  serviceRecordCost: { display: "inline-block", fontSize: 11.5, fontWeight: 700, color: "#A5661A", background: "#FBEEDD", borderRadius: 6, padding: "4px 7px", marginTop: 5 },
   timelineNote: { fontSize: 12.5, color: "#16262B", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, padding: 8, marginTop: 6, lineHeight: 1.5 },
   timelineBy: { fontSize: 10.5, color: "#B7C4C2", marginTop: 5 },
   visitForm: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 14, marginBottom: 16 },
+  serviceCostAddRow: { display: "flex", alignItems: "center", gap: 6 },
+  serviceCostList: { marginTop: 8, background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 8, padding: "6px 9px" },
+  serviceCostRow: { display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #F0F3F2", fontSize: 12, color: "#4C6169" },
+  serviceCostTotal: { textAlign: "right", color: "#A5661A", fontWeight: 700, fontSize: 12, paddingTop: 6 },
   formRow2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
   formRow3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
   fieldLabel: { fontSize: 11.5, fontWeight: 600, color: "#4C6169", marginBottom: 5 },
