@@ -1,0 +1,24 @@
+Failed to compile.
+
+./app/orders/page.js
+Error: 
+  [31mx[0m Expected ',', got 'style'
+      ,-[[36;1;4mC:\Users\yipei\Desktop\ac-repair-tracker\ac-repair-tracker\app\orders\page.js[0m:1446:1]
+ [2m1446[0m |               <div style={styles.sectionTitle}><Shield size={13} /> 投保信息</div>
+ [2m1447[0m |               <div style={styles.unassignedHint}>指派师傅后可填写投保信息</div>
+ [2m1448[0m |             </div>
+ [2m1449[0m |           <div style={styles.sectionBlock}>
+      : [31;1m               ^^^^^[0m
+ [2m1450[0m |             <div style={styles.sectionTitle}><DollarSign size={13} /> 向甲方报价管理</div>
+ [2m1451[0m |             {totalCharge > 0 && (
+ [2m1452[0m |               <div style={styles.moneyRow}>
+      `----
+
+Caused by:
+    Syntax Error
+
+Import trace for requested module:
+./app/orders/page.js
+
+
+> Build failed because of webpack errors

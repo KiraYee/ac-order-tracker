@@ -13,8 +13,8 @@ import AppShell from "../components/AppShell";
 import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
   orderFromDb, visitFromDb, orderProfit,
-  searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge, lineCost,
-  itemsChargeTotal, itemsCostTotal, visitCostTotal, INSURANCE_TYPES,
+  searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
+  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, costItemAmount, costItemQty, costItemUnitPrice, INSURANCE_TYPES,
   WORK_ORDER_VISIBLE_STATUSES, WORK_ORDER_STATUSES,
 } from "../../lib/dataHelpers";
 
@@ -122,7 +122,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, filteredO
     const tech = techById.get(order.assignedTechnicianId);
     const quoteItems = orderQuoteItems(order);
     const quoteTotal = itemsChargeTotal(quoteItems);
-    const costTotal = itemsCostTotal(quoteItems);
+    const costTotal = orderVisitCostTotal(order);
     return {
       "工单编号": order.ticketNo || "",
       "报修时间": excelDate(order.reportTime),
@@ -141,7 +141,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, filteredO
       "投保类型": order.insuranceType || "",
       "投保金额": order.insuranceAmount ?? "",
       "报价总额": quoteTotal,
-      "师傅成本总额": costTotal,
+       "师傅实际成本总额": costTotal,
       "利润": quoteTotal - costTotal,
       "师傅是否结算": order.technicianSettled ? "是" : order.technicianSettled === false ? "否" : "",
       "完成时间": excelDate(order.completedAt),
@@ -152,17 +152,13 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, filteredO
   exportOrders.forEach((order) => {
     orderQuoteItems(order).forEach((item) => {
       const charge = lineCharge(item);
-      const cost = lineCost(item);
       details.push({
         "工单编号": order.ticketNo || "",
         "品牌方": order.brand || "",
         "项目": item.label || "",
         "数量": item.qty ?? "",
         "收费单价": item.chargeUnit ?? "",
-        "成本单价": item.costUnit ?? "",
         "收费小计": charge,
-        "成本小计": cost,
-        "利润": charge - cost,
       });
     });
   });
@@ -358,7 +354,7 @@ function OrdersView({ userEmail }) {
     }
   }
 
-  async function addFeePreset(label, chargeUnit, costUnit) {
+  async function addFeePreset(label, chargeUnit) {
     try {
       const { data, error } = await supabase
         .from("fee_presets")
@@ -367,7 +363,6 @@ function OrdersView({ userEmail }) {
           amount: Number(chargeUnit) || 0,
           kind: "charge",
           charge_unit: Number(chargeUnit) || 0,
-          cost_unit: Number(costUnit) || 0,
         })
         .select()
         .single();
@@ -1095,8 +1090,6 @@ function DetailPanel({
   const follower = employees.find((e) => e.id === order.followerId);
   const quoteItems = orderQuoteItems(order);
   const totalCharge = itemsChargeTotal(quoteItems);
-  const totalCost = itemsCostTotal(quoteItems);
-  const profit = totalCharge - totalCost;
   const showWorkOrder = WORK_ORDER_VISIBLE_STATUSES.includes(order.status) || order.needWorkOrder;
 
   const [city, setCity] = useState(order.city || "");
@@ -1454,16 +1447,11 @@ function DetailPanel({
               <div style={styles.unassignedHint}>指派师傅后可填写投保信息</div>
             </div>
           )}
-
           <div style={styles.sectionBlock}>
-            <div style={styles.sectionTitle}><DollarSign size={13} /> 报价管理</div>
-            {(totalCharge > 0 || totalCost > 0) && (
+            <div style={styles.sectionTitle}><DollarSign size={13} /> 向甲方报价管理</div>
+            {totalCharge > 0 && (
               <div style={styles.moneyRow}>
-                <div style={styles.moneyChip}>报价 ¥{totalCharge}</div>
-                <div style={styles.moneyChip}>成本 ¥{totalCost}</div>
-                <div style={{ ...styles.moneyChip, color: profit >= 0 ? "#2C6B45" : "#A23931", background: profit >= 0 ? "#E4F3E9" : "#F6E7E6" }}>
-                  利润 ¥{profit}
-                </div>
+                <div style={styles.moneyChip}>向甲方报价 ¥{totalCharge}</div>
                 {order.status === "已完成" && (
                   <button
                     style={{ ...styles.settleBtn, ...(order.clientSettled ? styles.settleBtnDone : {}) }}
@@ -1637,16 +1625,14 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
   const [label, setLabel] = useState("");
   const [qty, setQty] = useState("1");
   const [chargeUnit, setChargeUnit] = useState("");
-  const [costUnit, setCostUnit] = useState("");
 
   const hints = useMemo(() => searchPriceHistory(orders, label, 5), [orders, label]);
 
-  function addLine(l, q, cu, ou) {
+  function addLine(l, q, cu) {
     const row = {
       label: l,
       qty: Number(q) || 1,
       chargeUnit: Number(cu) || 0,
-      costUnit: Number(ou) || 0,
     };
     setItems((prev) => [...prev, row]);
   }
@@ -1656,7 +1642,6 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
   }
 
   const chargeTotal = itemsChargeTotal(items);
-  const costTotal = itemsCostTotal(items);
 
   return (
     <div>
@@ -1664,14 +1649,13 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
         <div style={styles.feePresetRow}>
           {feePresets.map((p) => {
             const cu = p.charge_unit ?? (p.kind === "charge" ? p.amount : 0) ?? 0;
-            const ou = p.cost_unit ?? (p.kind === "cost" ? p.amount : 0) ?? 0;
             return (
               <button
                 key={p.id}
                 style={styles.feePresetChipBtn}
-                onClick={() => addLine(p.label, 1, cu, ou)}
+                onClick={() => addLine(p.label, 1, cu)}
               >
-                {p.label} 甲¥{cu || 0} / 师¥{ou || 0}
+                {p.label} ¥{cu || 0}
               </button>
             );
           })}
@@ -1681,17 +1665,15 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
         <input style={styles.input} placeholder="项目名，如：清洗" value={label} onChange={(e) => setLabel(e.target.value)} />
         <input style={styles.input} type="number" placeholder="数量" value={qty} onChange={(e) => setQty(e.target.value)} />
         <input style={styles.input} type="number" placeholder="甲方单价" value={chargeUnit} onChange={(e) => setChargeUnit(e.target.value)} />
-        <input style={styles.input} type="number" placeholder="师傅单价" value={costUnit} onChange={(e) => setCostUnit(e.target.value)} />
         <button
           style={styles.smallPrimaryBtn}
           onClick={async () => {
             if (!label.trim()) return;
-            addLine(label.trim(), qty, chargeUnit, costUnit);
-            await onAddPreset(label.trim(), Number(chargeUnit) || 0, Number(costUnit) || 0);
+            addLine(label.trim(), qty, chargeUnit);
+            await onAddPreset(label.trim(), Number(chargeUnit) || 0);
             setLabel("");
             setQty("1");
             setChargeUnit("");
-            setCostUnit("");
           }}
         >
           <Plus size={12} /> 添加
@@ -1699,11 +1681,11 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
       </div>
       {hints.length > 0 && (
         <div style={styles.priceRefBox}>
-          <div style={styles.priceRefTitle}>历史参考（同一项目的甲方价 / 师傅价）</div>
+          <div style={styles.priceRefTitle}>历史参考（同一项目的甲方价）</div>
           {hints.map((r, i) => (
             <div key={i} style={styles.priceRefRow}>
               <span>{r.city ? `${r.city}·` : ""}{r.mall} · {r.label}</span>
-              <span>甲 ¥{r.chargeUnit} / 师 ¥{r.costUnit}</span>
+              <span>甲 ¥{r.chargeUnit}</span>
               <span style={{ color: "#B7C4C2" }}>{fmtDate(r.date)}</span>
             </div>
           ))}
@@ -1730,20 +1712,14 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
                 value={it.chargeUnit}
                 onChange={(e) => updateRow(idx, { chargeUnit: Number(e.target.value) || 0 })}
               />
-              <input
-                style={{ ...styles.input, width: 72 }}
-                type="number"
-                value={it.costUnit}
-                onChange={(e) => updateRow(idx, { costUnit: Number(e.target.value) || 0 })}
-              />
-              <span style={styles.quoteSub}>甲¥{lineCharge(it)} / 师¥{lineCost(it)}</span>
+              <span style={styles.quoteSub}>合计 ¥{lineCharge(it)}</span>
               <button style={styles.tinyIconBtn} onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}>
                 <X size={12} />
               </button>
             </div>
           ))}
           <div style={styles.feeTotalRow}>
-            报价合计 ¥{chargeTotal} · 成本合计 ¥{costTotal} · 利润 ¥{chargeTotal - costTotal}
+            向甲方报价合计 ¥{chargeTotal}
           </div>
         </div>
       )}
@@ -1761,7 +1737,8 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
   const [serviceContent, setServiceContent] = useState(initialVisit?.serviceContent || "");
   const [costItems, setCostItems] = useState(() => (initialVisit?.costItems || []).map((item) => ({ ...item })));
   const [costLabel, setCostLabel] = useState("");
-  const [costAmount, setCostAmount] = useState("");
+  const [costQty, setCostQty] = useState("1");
+  const [costUnitPrice, setCostUnitPrice] = useState("");
   const [masterPhone, setMasterPhone] = useState(initialVisit?.masterPhone || "");
   const [freeMasterName, setFreeMasterName] = useState(initialVisit && !initTech ? initialVisit.master : "");
   const [visitTime, setVisitTime] = useState(() => {
@@ -1828,15 +1805,18 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
       <Field label="师傅费用">
         <div style={styles.serviceCostAddRow}>
           <input style={{ ...styles.input, flex: 1 }} value={costLabel} onChange={(e) => setCostLabel(e.target.value)} placeholder="费用项目，如：上门费" />
-          <input style={{ ...styles.input, width: 100 }} type="number" value={costAmount} onChange={(e) => setCostAmount(e.target.value)} placeholder="金额" />
+          <input style={{ ...styles.input, width: 64 }} type="number" min="1" value={costQty} onChange={(e) => setCostQty(e.target.value)} placeholder="数量" />
+          <input style={{ ...styles.input, width: 100 }} type="number" value={costUnitPrice} onChange={(e) => setCostUnitPrice(e.target.value)} placeholder="单价" />
           <button
             type="button"
             style={styles.smallPrimaryBtn}
             onClick={() => {
-              if (!costLabel.trim() || costAmount === "") return;
-              setCostItems((prev) => [...prev, { label: costLabel.trim(), amount: Number(costAmount) || 0 }]);
+              if (!costLabel.trim() || costUnitPrice === "") return;
+              const item = { label: costLabel.trim(), qty: Number(costQty) || 1, unitPrice: Number(costUnitPrice) || 0 };
+              setCostItems((prev) => [...prev, { ...item, amount: costItemAmount(item) }]);
               setCostLabel("");
-              setCostAmount("");
+              setCostQty("1");
+              setCostUnitPrice("");
             }}
           >
             <Plus size={12} /> 添加
@@ -1847,13 +1827,13 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
             {costItems.map((item, index) => (
               <div key={`${item.label}-${index}`} style={styles.serviceCostRow}>
                 <span>{item.label}</span>
-                <span>¥{Number(item.amount) || 0}</span>
+                <span>{costItemQty(item)}次 · ¥{costItemUnitPrice(item)} · ¥{costItemAmount(item)}</span>
                 <button type="button" style={styles.tinyIconBtn} onClick={() => setCostItems((prev) => prev.filter((_, i) => i !== index))}>
                   <X size={12} />
                 </button>
               </div>
             ))}
-            <div style={styles.serviceCostTotal}>师傅费用合计 ¥{costItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)}</div>
+            <div style={styles.serviceCostTotal}>师傅费用合计 ¥{costItems.reduce((sum, item) => sum + costItemAmount(item), 0)}</div>
           </div>
         )}
       </Field>

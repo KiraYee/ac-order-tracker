@@ -7,6 +7,7 @@ import {
   Pencil, Link2, DollarSign, TrendingUp, CalendarCheck
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal } from "../../lib/dataHelpers";
 
 const STATUSES = ["待核实", "待派工", "待上门", "维修中", "已完成", "已取消"];
 
@@ -45,11 +46,8 @@ function daysSince(iso) {
   return Math.max(0, Math.floor(diff / 86400000));
 }
 
-function visitCostTotal(v) {
-  return (v.costItems || []).reduce((s, ci) => s + (Number(ci.amount) || 0), 0);
-}
 function orderCostTotal(o) {
-  return (o.visits || []).reduce((s, v) => s + visitCostTotal(v), 0);
+  return orderVisitCostTotal(o);
 }
 
 // ---- Supabase <-> 前端字段映射 ----
@@ -795,7 +793,7 @@ function DetailPanel({
                           <div style={styles.visitCostRow}>
                             {v.costItems.map((ci, i) => (
                               <span key={i} style={styles.visitCostChip}>
-                                {ci.label} ¥{ci.amount}
+                                {ci.label} · {costItemQty(ci)}次 · ¥{costItemUnitPrice(ci)} · ¥{costItemAmount(ci)}
                               </span>
                             ))}
                             <span style={styles.visitCostTotalTag}>合计 ¥{vCost}</span>
@@ -828,22 +826,28 @@ function InfoItem({ icon: Icon, label, value }) {
 
 function FeeItemsEditor({ feePresets, items, onChange, onAddPreset, onUpdatePreset, onDeletePreset }) {
   const [customLabel, setCustomLabel] = useState("");
-  const [customAmount, setCustomAmount] = useState("");
+  const [customQty, setCustomQty] = useState("1");
+  const [customUnitPrice, setCustomUnitPrice] = useState("");
   const [editingId, setEditingId] = useState(null);
   const [editLabel, setEditLabel] = useState("");
   const [editAmount, setEditAmount] = useState("");
 
-  function addItem(label, amount) {
-    onChange([...items, { label, amount: Number(amount) || 0 }]);
+  function addItem(label, qty, unitPrice) {
+    const amount = costItemAmount({ qty, unitPrice });
+    onChange([...items, { label, qty: Number(qty) || 1, unitPrice: Number(unitPrice) || 0, amount }]);
   }
   function removeItem(idx) {
     onChange(items.filter((_, i) => i !== idx));
   }
-  function updateItemAmount(idx, amount) {
-    onChange(items.map((it, i) => (i === idx ? { ...it, amount: Number(amount) || 0 } : it)));
+  function updateItem(idx, patch) {
+    onChange(items.map((it, i) => {
+      if (i !== idx) return it;
+      const next = { ...it, ...patch };
+      return { ...next, amount: costItemAmount(next) };
+    }));
   }
 
-  const total = items.reduce((s, it) => s + (Number(it.amount) || 0), 0);
+  const total = items.reduce((s, it) => s + costItemAmount(it), 0);
 
   return (
     <div>
@@ -878,7 +882,7 @@ function FeeItemsEditor({ feePresets, items, onChange, onAddPreset, onUpdatePres
               </span>
             ) : (
               <span key={p.id} style={styles.feePresetChip}>
-                <button style={styles.feePresetChipBtn} onClick={() => addItem(p.label, p.amount)}>
+                <button style={styles.feePresetChipBtn} onClick={() => addItem(p.label, 1, p.amount)}>
                   {p.label} ¥{p.amount}
                 </button>
                 <button
@@ -908,20 +912,29 @@ function FeeItemsEditor({ feePresets, items, onChange, onAddPreset, onUpdatePres
           onChange={(e) => setCustomLabel(e.target.value)}
         />
         <input
+          style={{ ...styles.input, width: 64 }}
+          type="number"
+          min="1"
+          placeholder="数量"
+          value={customQty}
+          onChange={(e) => setCustomQty(e.target.value)}
+        />
+        <input
           style={{ ...styles.input, width: 90 }}
           type="number"
-          placeholder="金额"
-          value={customAmount}
-          onChange={(e) => setCustomAmount(e.target.value)}
+          placeholder="单价"
+          value={customUnitPrice}
+          onChange={(e) => setCustomUnitPrice(e.target.value)}
         />
         <button
           style={styles.smallPrimaryBtn}
           onClick={async () => {
             if (!customLabel.trim()) return;
-            addItem(customLabel.trim(), customAmount);
-            await onAddPreset(customLabel.trim(), Number(customAmount) || 0);
+            addItem(customLabel.trim(), customQty, customUnitPrice);
+            await onAddPreset(customLabel.trim(), Number(customUnitPrice) || 0);
             setCustomLabel("");
-            setCustomAmount("");
+            setCustomQty("1");
+            setCustomUnitPrice("");
           }}
         >
           <Plus size={12} /> 添加
@@ -932,13 +945,15 @@ function FeeItemsEditor({ feePresets, items, onChange, onAddPreset, onUpdatePres
           {items.map((it, idx) => (
             <div key={idx} style={styles.feeItemRow}>
               <span style={{ flex: 1 }}>{it.label}</span>
-              <span style={{ marginRight: 2 }}>¥</span>
+              <input style={styles.feeAmountInput} type="number" value={costItemQty(it)} onChange={(e) => updateItem(idx, { qty: Number(e.target.value) || 0 })} />
+              <span style={{ marginRight: 2 }}>次 ¥</span>
               <input
                 style={styles.feeAmountInput}
                 type="number"
-                value={it.amount}
-                onChange={(e) => updateItemAmount(idx, e.target.value)}
+                value={costItemUnitPrice(it)}
+                onChange={(e) => updateItem(idx, { unitPrice: Number(e.target.value) || 0 })}
               />
+              <span>¥{costItemAmount(it)}</span>
               <button style={styles.tinyIconBtn} onClick={() => removeItem(idx)}>
                 <X size={12} />
               </button>

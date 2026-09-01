@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, fmtDateShort, orderChargeTotal, orderCostTotal } from "../../lib/dataHelpers";
+import { orderFromDb, fmtDateShort, orderChargeTotal, orderVisitCostTotal } from "../../lib/dataHelpers";
 
 export default function FinancePage() {
   return (
@@ -109,13 +109,19 @@ function FinanceView({ userEmail }) {
   );
   const receivableTotal = receivables.reduce((s, o) => s + orderChargeTotal(o), 0);
 
-  // 应付师傅：工单成本尚未结给师傅
+  // 应付师傅：全部来自服务记录中的师傅费用，不读取报价成本
+  const technicianPayableTotal = orders.reduce((sum, order) => sum + orderVisitCostTotal(order), 0);
+  const technicianUnpaidTotal = orders.reduce(
+    (sum, order) => sum + (!order.technicianSettled ? orderVisitCostTotal(order) : 0),
+    0
+  );
+  const technicianPaidTotal = technicianPayableTotal - technicianUnpaidTotal;
   const payables = useMemo(() => {
     return orders
-      .filter((o) => orderCostTotal(o) > 0 && !o.technicianSettled)
+      .filter((o) => orderVisitCostTotal(o) > 0 && !o.technicianSettled)
       .map((o) => {
         const tech = technicians.find((t) => t.id === o.assignedTechnicianId);
-        return { order: o, cost: orderCostTotal(o), techName: tech?.name || "未指派师傅" };
+        return { order: o, cost: orderVisitCostTotal(o), techName: tech?.name || "未指派师傅" };
       })
       .sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
   }, [orders, technicians]);
@@ -156,8 +162,16 @@ function FinanceView({ userEmail }) {
           <div style={styles.statLabel}>应收甲方（{receivables.length} 单未结算）</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#C1443D40" }}>
-          <div style={styles.statNum}>¥{payableTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>应付师傅（{payables.length} 笔未付）</div>
+          <div style={styles.statNum}>¥{technicianPayableTotal.toLocaleString()}</div>
+          <div style={styles.statLabel}>应付师傅（全部服务记录）</div>
+        </div>
+        <div style={{ ...styles.statCard, borderColor: "#A5661A40" }}>
+          <div style={styles.statNum}>¥{technicianUnpaidTotal.toLocaleString()}</div>
+          <div style={styles.statLabel}>未支付师傅款（{payables.length} 单）</div>
+        </div>
+        <div style={{ ...styles.statCard, borderColor: "#3E8F6340" }}>
+          <div style={styles.statNum}>¥{technicianPaidTotal.toLocaleString()}</div>
+          <div style={styles.statLabel}>已支付师傅款</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#1F7A8C40" }}>
           <div style={styles.statNum}>¥{pendingAdvanceTotal.toLocaleString()}</div>
