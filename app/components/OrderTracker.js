@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal } from "../../lib/dataHelpers";
+import { ticketNoFromReportTime } from "../../lib/dataHelpers";
 
 const STATUSES = ["待核实", "待派工", "待上门", "维修中", "已完成", "已取消"];
 
@@ -69,6 +70,9 @@ function orderFromDb(row) {
     updatedAt: row.updated_at,
     relatedOrderId: row.related_order_id,
     assignedTechnicianId: row.assigned_technician_id,
+    clientSettled: row.client_settled,
+    technicianSettled: row.technician_settled,
+    expenseRecords: row.expense_records || [],
     visits: (row.visits || [])
       .map(visitFromDb)
       .sort((a, b) => new Date(a.visitTime) - new Date(b.visitTime)),
@@ -112,7 +116,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
     try {
       const { data, error } = await supabase
         .from("orders")
-        .select("*, visits(*)")
+        .select("*, expense_records(*), visits(*, expense_records(*))")
         .order("created_at", { ascending: false });
       if (error) throw error;
       setOrders((data || []).map(orderFromDb));
@@ -198,10 +202,17 @@ export default function OrderTracker({ userEmail, onSignOut }) {
 
   async function addOrder(data) {
     try {
-      const { count } = await supabase
+      const reportTime = data.reportTime || new Date().toISOString();
+      const reportDate = new Date(reportTime);
+      const reportPrefix = `KT${reportDate.getFullYear()}${String(reportDate.getMonth() + 1).padStart(2, "0")}${String(
+        reportDate.getDate()
+      ).padStart(2, "0")}${String(reportDate.getHours()).padStart(2, "0")}${String(reportDate.getMinutes()).padStart(2, "0")}`;
+      const { data: matchingTickets, error: ticketError } = await supabase
         .from("orders")
-        .select("id", { count: "exact", head: true });
-      const ticketNo = `KT-${String((count || 0) + 1).padStart(4, "0")}`;
+        .select("ticket_no")
+        .like("ticket_no", `${reportPrefix}%`);
+      if (ticketError) throw ticketError;
+      const ticketNo = ticketNoFromReportTime(reportTime, (matchingTickets || []).map((row) => row.ticket_no));
       const { data: row, error } = await supabase
         .from("orders")
         .insert({
@@ -213,7 +224,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           issue_desc: data.issueDesc,
           address: data.address || null,
           notes: data.notes || null,
-          report_time: data.reportTime,
+          report_time: reportTime,
           status: "待核实",
           created_by: userEmail,
           related_order_id: data.relatedOrderId || null,
@@ -511,6 +522,11 @@ function OrderCard({ order, technicians, onClick }) {
   const d = daysSince(order.reportTime);
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const cost = orderCostTotal(order);
+  const technicianRecords = [
+    ...(order.expenseRecords || []),
+    ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
+  ].filter((record, index, records) => record.type === "technician_fee" && records.findIndex((item) => item.id === record.id) === index);
+  const technicianSettled = technicianRecords.length > 0 && technicianRecords.every((record) => record.is_settled);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -530,13 +546,8 @@ function OrderCard({ order, technicians, onClick }) {
           <Clock size={12} /> 报修 {fmtDate(order.reportTime)}
           {d !== null && d > 0 ? ` · ${d}天前` : ""}
         </span>
-        {order.visits.length > 0 && (
-          <span style={styles.cardMeta}>
-            <Wrench size={12} /> 已上门 {order.visits.length} 次
-          </span>
-        )}
       </div>
-      {(tech || cost > 0) && (
+      {(tech || cost > 0 || order.clientSettled !== undefined) && (
         <div style={styles.cardMetaRow}>
           {tech && (
             <span style={styles.cardMeta}>
@@ -548,6 +559,12 @@ function OrderCard({ order, technicians, onClick }) {
               <DollarSign size={12} /> ¥{cost}
             </span>
           )}
+          <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
+            甲方{order.clientSettled ? "已结算" : "未结算"}
+          </span>
+          <span style={{ ...styles.settlementBadge, ...(technicianSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
+            师傅费用{technicianSettled ? "已结清" : "未结清"}
+          </span>
         </div>
       )}
       {lastVisit && (
@@ -1265,6 +1282,9 @@ const styles = {
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },
+  settlementBadge: { display: "inline-flex", alignItems: "center", borderRadius: 12, padding: "3px 7px", fontSize: 10.5, fontWeight: 700 },
+  settlementBadgePending: { background: "#FBEEDD", color: "#A5661A" },
+  settlementBadgeDone: { background: "#E4F3E9", color: "#2C6B45" },
   lastVisitRow: { display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, borderTop: "1px dashed #E2E9E8", paddingTop: 7, marginTop: 2 },
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 50, animation: "fadeIn .15s ease" },
   panel: { width: 440, maxWidth: "100%", background: "#F9FAFA", height: "100%", display: "flex", flexDirection: "column", animation: "slideIn .2s ease", boxShadow: "-8px 0 24px rgba(0,0,0,0.08)" },

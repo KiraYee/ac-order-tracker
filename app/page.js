@@ -35,7 +35,7 @@ function DashboardContent() {
       setLoading(true);
       const { data } = await supabase
         .from("orders")
-        .select("*, visits(*)")
+        .select("*, expense_records(*), visits(*, expense_records(*))")
         .order("report_time", { ascending: false });
       setOrders((data || []).map(orderFromDb));
       setLoading(false);

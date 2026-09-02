@@ -7,7 +7,7 @@ import {
 import { supabase } from "../../lib/supabaseClient";
 import * as XLSX from "xlsx";
 import AppShell from "../components/AppShell";
-import { orderFromDb, computeTechnicianStats, groupByCity, fmtDate, visitCostTotal, resultMeta, SKILL_PRESETS } from "../../lib/dataHelpers";
+import { orderFromDb, computeTechnicianStats, groupByCity, fmtDate, visitTechnicianCostTotal, resultMeta, SKILL_PRESETS } from "../../lib/dataHelpers";
 
 function exportTechniciansWorkbook(technicians) {
   const rows = technicians.map((technician) => ({
@@ -60,7 +60,7 @@ function TechniciansView() {
     setLoading(true);
     const [{ data: techs }, { data: ords }] = await Promise.all([
       supabase.from("technicians").select("*").order("name"),
-      supabase.from("orders").select("*, visits(*)"),
+      supabase.from("orders").select("*, expense_records(*), visits(*, expense_records(*))"),
     ]);
     setTechnicians(techs || []);
     setOrders((ords || []).map(orderFromDb));
@@ -252,7 +252,7 @@ function TechnicianDetail({ technician, orders, onClose }) {
             <div style={styles.visitList}>
               {relatedVisits.map((v) => {
                 const m = resultMeta(v.resultType);
-                const cost = visitCostTotal(v);
+                const cost = visitTechnicianCostTotal(v);
                 return (
                   <Link key={v.id} href={`/orders?open=${v.order.id}`} style={styles.visitRow}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>

@@ -6,7 +6,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, fmtDateShort, orderChargeTotal, orderVisitCostTotal } from "../../lib/dataHelpers";
+import { orderFromDb, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
 
 export default function FinancePage() {
   return (
@@ -33,7 +33,7 @@ function FinanceView({ userEmail }) {
   async function load() {
     setLoading(true);
     const [{ data: ords }, { data: techs }, { data: advs }] = await Promise.all([
-      supabase.from("orders").select("*, visits(*)"),
+      supabase.from("orders").select("*, expense_records(*), visits(*, expense_records(*))"),
       supabase.from("technicians").select("*"),
       supabase.from("advances").select("*").order("created_at", { ascending: false }),
     ]);
@@ -45,6 +45,7 @@ function FinanceView({ userEmail }) {
 
   async function toggleClientSettled(order) {
     const next = !order.clientSettled;
+    if (!next && !window.confirm("甲方已结算，确认撤销结算吗？")) return;
     try {
       const { error } = await supabase
         .from("orders")
@@ -59,6 +60,7 @@ function FinanceView({ userEmail }) {
 
   async function toggleTechnicianSettled(order) {
     const next = !order.technicianSettled;
+    if (!next && !window.confirm("师傅费用已结算，确认撤销结算吗？")) return;
     try {
       const { error } = await supabase
         .from("orders")
@@ -107,6 +109,7 @@ function FinanceView({ userEmail }) {
 
   async function toggleReimbursed(advance) {
     const next = !advance.reimbursed;
+    if (!next && !window.confirm("该垫付已报销，确认撤销报销吗？")) return;
     try {
       const { error } = await supabase
         .from("advances")
@@ -121,24 +124,24 @@ function FinanceView({ userEmail }) {
 
   // 应收：已完成但甲方未结算的工单
   const receivables = useMemo(
-    () => orders.filter((o) => o.status === "已完成" && !o.clientSettled && orderChargeTotal(o) > 0),
+    () => orders.filter((o) => orderChargeTotal(o) > 0),
     [orders]
   );
   const receivableTotal = receivables.reduce((s, o) => s + orderChargeTotal(o), 0);
 
-  // 应付师傅：全部来自服务记录中的师傅费用，不读取报价成本
-  const technicianPayableTotal = orders.reduce((sum, order) => sum + orderVisitCostTotal(order), 0);
+  // 应付师傅：只统计 expense_records.type=technician_fee，不包含保险费等其他成本
+  const technicianPayableTotal = orders.reduce((sum, order) => sum + orderTechnicianCostTotal(order), 0);
   const technicianUnpaidTotal = orders.reduce(
-    (sum, order) => sum + (!order.technicianSettled ? orderVisitCostTotal(order) : 0),
+    (sum, order) => sum + (!order.technicianSettled ? orderTechnicianCostTotal(order) : 0),
     0
   );
   const technicianPaidTotal = technicianPayableTotal - technicianUnpaidTotal;
   const payables = useMemo(() => {
     return orders
-      .filter((o) => orderVisitCostTotal(o) > 0 && !o.technicianSettled)
+      .filter((o) => orderTechnicianCostTotal(o) > 0)
       .map((o) => {
         const tech = technicians.find((t) => t.id === o.assignedTechnicianId);
-        return { order: o, cost: orderVisitCostTotal(o), techName: tech?.name || "未指派师傅" };
+        return { order: o, cost: orderTechnicianCostTotal(o), techName: tech?.name || "未指派师傅" };
       })
       .sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
   }, [orders, technicians]);
@@ -147,6 +150,11 @@ function FinanceView({ userEmail }) {
   // 垫付待报销
   const pendingAdvances = advances.filter((a) => !a.reimbursed);
   const pendingAdvanceTotal = pendingAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
+  const completedReceivables = receivables.filter((o) => o.clientSettled);
+  const pendingReceivables = receivables.filter((o) => !o.clientSettled);
+  const completedPayables = payables.filter((p) => p.order.technicianSettled);
+  const pendingPayables = payables.filter((p) => !p.order.technicianSettled);
+  const completedAdvances = advances.filter((a) => a.reimbursed);
 
   if (loading) {
     return (
@@ -206,54 +214,27 @@ function FinanceView({ userEmail }) {
         <button style={{ ...styles.tab, ...(tab === "advances" ? styles.tabActive : {}) }} onClick={() => setTab("advances")}>
           垫付报销
         </button>
+        <button style={{ ...styles.tab, ...(tab === "all" ? styles.tabActive : {}) }} onClick={() => setTab("all")}>
+          全部
+        </button>
       </div>
 
       {tab === "receivable" && (
-        receivables.length === 0 ? (
-          <EmptyState text="没有待结算的工单" />
-        ) : (
-          <div style={styles.list}>
-            {receivables.map((o) => (
-              <div key={o.id} style={styles.row}>
-                <Link href={`/orders?open=${o.id}`} style={styles.rowMain}>
-                  <span style={styles.ticketNo}>{o.ticketNo}</span>
-                  <span style={styles.rowMall}>{o.mall}</span>
-                  <span style={styles.rowDate}>{fmtDateShort(o.updatedAt)}</span>
-                </Link>
-                <div style={styles.rowRight}>
-                  <span style={styles.amount}>¥{orderChargeTotal(o)}</span>
-                  <button style={styles.settleBtn} onClick={() => toggleClientSettled(o)}>
-                    <CheckCircle2 size={13} /> 标记已结算
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )
+        <FinanceSectionGroup
+          pending={pendingReceivables}
+          completed={completedReceivables}
+          emptyText="没有客户费用记录"
+          render={(o) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} onSettle={() => toggleClientSettled(o)} />}
+        />
       )}
 
       {tab === "payable" && (
-        payables.length === 0 ? (
-          <EmptyState text="没有待付款的师傅费用" />
-        ) : (
-          <div style={styles.list}>
-            {payables.map((p) => (
-              <div key={p.order.id} style={styles.row}>
-                <Link href={`/orders?open=${p.order.id}`} style={styles.rowMain}>
-                  <span style={styles.ticketNo}>{p.order.ticketNo}</span>
-                  <span style={styles.rowMall}>{p.order.mall} · {p.techName}</span>
-                  <span style={styles.rowDate}>{fmtDateShort(p.order.updatedAt)}</span>
-                </Link>
-                <div style={styles.rowRight}>
-                  <span style={styles.amount}>¥{p.cost}</span>
-                  <button style={styles.settleBtn} onClick={() => toggleTechnicianSettled(p.order)}>
-                    <CheckCircle2 size={13} /> 标记已付款
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )
+        <FinanceSectionGroup
+          pending={pendingPayables}
+          completed={completedPayables}
+          emptyText="没有师傅费用记录"
+          render={(p) => <FinanceOrderRow key={p.order.id} order={p.order} kind="technician" amount={p.cost} settled={p.order.technicianSettled} settledAt={p.order.technicianSettledAt} suffix={p.techName} onSettle={() => toggleTechnicianSettled(p.order)} />}
+        />
       )}
 
       {tab === "advances" && (
@@ -263,42 +244,34 @@ function FinanceView({ userEmail }) {
               <Plus size={15} /> 登记垫付
             </button>
           </div>
-          {advances.length === 0 ? (
-            <EmptyState text="还没有垫付记录" />
-          ) : (
-            <div style={styles.list}>
-              {advances.map((a) => {
-                const relatedOrder = a.order_id ? orders.find((o) => o.id === a.order_id) : null;
-                return (
-                  <div key={a.id} style={styles.row}>
-                    <div style={styles.rowMain}>
-                      <span style={{ fontWeight: 700 }}>{a.employee_name}</span>
-                      <span style={styles.rowMall}>{a.reason || "（无说明）"}</span>
-                      {relatedOrder && (
-                        <Link href={`/orders?open=${relatedOrder.id}`} style={styles.relatedTag}>
-                          {relatedOrder.ticketNo}
-                        </Link>
-                      )}
-                      <span style={styles.rowDate}>{fmtDateShort(a.created_at)}</span>
-                    </div>
-                    <div style={styles.rowRight}>
-                      <span style={styles.amount}>¥{a.amount}</span>
-                      <button style={styles.settleBtn} onClick={() => setEditingAdvance(a)}>
-                        <Pencil size={13} /> 编辑
-                      </button>
-                      <button
-                        style={{ ...styles.settleBtn, ...(a.reimbursed ? styles.settleBtnDone : {}) }}
-                        onClick={() => toggleReimbursed(a)}
-                      >
-                        <CircleDollarSign size={13} /> {a.reimbursed ? "已报销" : "标记已报销"}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+          <FinanceSectionGroup
+            pending={pendingAdvances}
+            completed={completedAdvances}
+            emptyText="还没有垫付记录"
+            render={(a) => <FinanceAdvanceRow key={a.id} advance={a} orders={orders} onEdit={() => setEditingAdvance(a)} onToggle={() => toggleReimbursed(a)} />}
+          />
         </div>
+      )}
+
+      {tab === "all" && (
+        <FinanceSectionGroup
+          pending={[
+            ...pendingReceivables.map((o) => ({ kind: "client", createdAt: o.createdAt, item: o })),
+            ...pendingPayables.map((p) => ({ kind: "technician", createdAt: p.order.createdAt, item: p })),
+            ...pendingAdvances.map((a) => ({ kind: "advance", createdAt: a.created_at, item: a })),
+          ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))}
+          completed={[
+            ...completedReceivables.map((o) => ({ kind: "client", createdAt: o.createdAt, item: o })),
+            ...completedPayables.map((p) => ({ kind: "technician", createdAt: p.order.createdAt, item: p })),
+            ...completedAdvances.map((a) => ({ kind: "advance", createdAt: a.created_at, item: a })),
+          ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))}
+          emptyText="还没有财务记录"
+          render={(entry) => entry.kind === "client"
+            ? <FinanceOrderRow key={`client-${entry.item.id}`} order={entry.item} kind="client" amount={orderChargeTotal(entry.item)} settled={entry.item.clientSettled} settledAt={entry.item.clientSettledAt} onSettle={() => toggleClientSettled(entry.item)} />
+            : entry.kind === "technician"
+              ? <FinanceOrderRow key={`technician-${entry.item.order.id}`} order={entry.item.order} kind="technician" amount={entry.item.cost} settled={entry.item.order.technicianSettled} settledAt={entry.item.order.technicianSettledAt} suffix={entry.item.techName} onSettle={() => toggleTechnicianSettled(entry.item.order)} />
+              : <FinanceAdvanceRow key={`advance-${entry.item.id}`} advance={entry.item} orders={orders} onEdit={() => setEditingAdvance(entry.item)} onToggle={() => toggleReimbursed(entry.item)} />}
+        />
       )}
 
       {(showNewAdvance || editingAdvance) && (
@@ -308,8 +281,70 @@ function FinanceView({ userEmail }) {
           initial={editingAdvance}
           onClose={() => { setShowNewAdvance(false); setEditingAdvance(null); }}
           onSubmit={(data) => editingAdvance ? updateAdvance(editingAdvance.id, data) : addAdvance(data)}
+          locked={!!editingAdvance?.reimbursed}
+          onUnlock={async () => {
+            if (!window.confirm("该记录已报销，确认撤销报销并允许修改金额吗？")) return;
+            await toggleReimbursed(editingAdvance);
+            setEditingAdvance((current) => current ? { ...current, reimbursed: false, reimbursed_at: null } : current);
+          }}
         />
       )}
+    </div>
+  );
+}
+
+function FinanceSectionGroup({ pending, completed, render, emptyText }) {
+  return (
+    <div>
+      <div style={styles.groupTitle}>待处理（{pending.length}）</div>
+      {pending.length > 0 ? <div style={styles.list}>{pending.map(render)}</div> : <EmptyState text={`没有${emptyText.replace("记录", "待处理记录")}`} />}
+      <div style={styles.groupTitle}>已完成（{completed.length}）</div>
+      {completed.length > 0 ? <div style={styles.list}>{completed.map(render)}</div> : <div style={styles.completedEmpty}>暂无已完成记录</div>}
+    </div>
+  );
+}
+
+function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, onSettle }) {
+  const color = kind === "client" ? "#1F7A8C" : "#3E8F63";
+  const label = kind === "client" ? "客户" : "师傅";
+  return (
+    <div style={styles.row}>
+      <Link href={`/orders?open=${order.id}`} style={styles.rowMain}>
+        <span style={{ ...styles.typeTag, background: `${color}18`, color }}>{label}</span>
+        <span style={styles.ticketNo}>{order.ticketNo}</span>
+        <span style={styles.rowMall}>{order.mall}{suffix ? ` · ${suffix}` : ""}</span>
+        <span style={styles.rowDate}>登记：{fmtDateShort(createdAt || order.createdAt)}</span>
+        <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>
+      </Link>
+      <div style={styles.rowRight}>
+        <span style={styles.amount}>¥{amount}</span>
+        <button style={{ ...styles.settleBtn, ...(settled ? styles.settleBtnDone : {}) }} onClick={onSettle}>
+          <CheckCircle2 size={13} /> {settled ? "撤销结算" : kind === "client" ? "标记已结算" : "标记已付款"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FinanceAdvanceRow({ advance, orders, onEdit, onToggle }) {
+  const relatedOrder = advance.order_id ? orders.find((o) => o.id === advance.order_id) : null;
+  return (
+    <div style={styles.row}>
+      <div style={styles.rowMain}>
+        <span style={{ ...styles.typeTag, background: "#FBEEDD", color: "#A5661A" }}>垫付</span>
+        <span style={{ fontWeight: 700 }}>{advance.employee_name}</span>
+        <span style={styles.rowMall}>{advance.reason || "（无说明）"}</span>
+        {relatedOrder && <Link href={`/orders?open=${relatedOrder.id}`} style={styles.relatedTag}>{relatedOrder.ticketNo}</Link>}
+        <span style={styles.rowDate}>登记：{fmtDateShort(advance.created_at)}</span>
+        <span style={styles.rowDate}>报销：{advance.reimbursed_at ? fmtDateShort(advance.reimbursed_at) : "—"}</span>
+      </div>
+      <div style={styles.rowRight}>
+        <span style={styles.amount}>¥{advance.amount}</span>
+        <button style={styles.settleBtn} onClick={onEdit}><Pencil size={13} /> 编辑</button>
+        <button style={{ ...styles.settleBtn, ...(advance.reimbursed ? styles.settleBtnDone : {}) }} onClick={onToggle}>
+          <CircleDollarSign size={13} /> {advance.reimbursed ? "撤销报销" : "标记已报销"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -323,7 +358,7 @@ function EmptyState({ text }) {
   );
 }
 
-function NewAdvanceModal({ orders, initial, onClose, onSubmit }) {
+function NewAdvanceModal({ orders, initial, onClose, onSubmit, locked = false, onUnlock }) {
   const [employeeName, setEmployeeName] = useState(initial?.employee_name || "");
   const [amount, setAmount] = useState(initial?.amount ?? "");
   const [reason, setReason] = useState(initial?.reason || "");
@@ -362,7 +397,7 @@ function NewAdvanceModal({ orders, initial, onClose, onSubmit }) {
             <input style={styles.input} value={employeeName} onChange={(e) => setEmployeeName(e.target.value)} placeholder="谁先垫的钱" />
           </Field>
           <Field label="金额 *">
-            <input style={styles.input} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <input style={styles.input} type="number" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={locked} readOnly={locked} />
           </Field>
           <Field label="原因说明">
             <input style={styles.input} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="如：垫付配件钱" />
@@ -399,6 +434,7 @@ function NewAdvanceModal({ orders, initial, onClose, onSubmit }) {
           </Field>
           {err && <div style={styles.formErr}>{err}</div>}
           <div style={styles.formActions}>
+            {locked && <button style={styles.ghostBtn} type="button" onClick={onUnlock}>撤销报销后修改金额</button>}
             <button style={styles.ghostBtn} onClick={onClose}>取消</button>
             <button style={styles.primaryBtn} onClick={submit}>保存</button>
           </div>
@@ -431,6 +467,8 @@ const styles = {
   tabs: { display: "flex", gap: 6, marginBottom: 16 },
   tab: { background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 600, color: "#4C6169" },
   tabActive: { background: "#E3F0F1", borderColor: "#1F7A8C55", color: "#145560" },
+  groupTitle: { fontSize: 12.5, fontWeight: 700, color: "#145560", margin: "14px 0 8px" },
+  completedEmpty: { color: "#8FA1A8", fontSize: 12, padding: "10px 0 18px" },
   emptyState: { display: "flex", flexDirection: "column", alignItems: "center", padding: "50px 0", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 12 },
   list: { display: "flex", flexDirection: "column", gap: 8, paddingBottom: 32 },
   row: { display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: "12px 14px", flexWrap: "wrap", gap: 10 },
@@ -439,6 +477,7 @@ const styles = {
   rowMall: { fontWeight: 600, fontSize: 13 },
   rowDate: { fontSize: 11, color: "#8FA1A8" },
   relatedTag: { fontSize: 10.5, background: "#E3F0F1", color: "#145560", padding: "2px 7px", borderRadius: 20, fontWeight: 600, textDecoration: "none" },
+  typeTag: { display: "inline-flex", alignItems: "center", borderRadius: 12, padding: "3px 7px", fontSize: 10.5, fontWeight: 700 },
   rowRight: { display: "flex", alignItems: "center", gap: 10 },
   amount: { fontWeight: 700, fontSize: 14 },
   settleBtn: { display: "flex", alignItems: "center", gap: 4, background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 20, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, color: "#4C6169" },

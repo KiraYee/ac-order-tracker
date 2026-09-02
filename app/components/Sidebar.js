@@ -1,11 +1,12 @@
 "use client";
 import Link from "next/link";
-import { LayoutDashboard, ClipboardList, Users, Wallet, Snowflake, LogOut, User } from "lucide-react";
+import { LayoutDashboard, ClipboardList, Users, Wallet, Store, Snowflake, LogOut, User } from "lucide-react";
 
 const NAV_ITEMS = [
   { key: "dashboard", href: "/", label: "总览", icon: LayoutDashboard },
   { key: "orders", href: "/orders", label: "工单", icon: ClipboardList },
   { key: "technicians", href: "/technicians", label: "师傅", icon: Users },
+  { key: "stores", href: "/stores", label: "门店", icon: Store },
   { key: "finance", href: "/finance", label: "财务", icon: Wallet },
 ];
 

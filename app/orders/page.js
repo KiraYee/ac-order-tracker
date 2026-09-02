@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Wrench, Phone, Clock, Plus, X,
   AlertTriangle, Search, Loader2, ClipboardList,
-  Pencil, Link2, DollarSign, Users, Trash2, CircleDollarSign, Shield, Camera,
+  Pencil, Link2, DollarSign, Users, Trash2, CircleDollarSign, Camera,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { pinyin } from "pinyin-pro";
@@ -12,10 +12,10 @@ import { useSearchParams } from "next/navigation";
 import AppShell from "../components/AppShell";
 import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
-  orderFromDb, visitFromDb, orderProfit,
+  orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, costItemAmount, costItemQty, costItemUnitPrice, INSURANCE_TYPES,
-  WORK_ORDER_VISIBLE_STATUSES, WORK_ORDER_STATUSES,
+  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName, storeIdentity,
+  WORK_ORDER_VISIBLE_STATUSES, WORK_ORDER_STATUSES, ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
 function pinyinInitials(value) {
@@ -180,6 +180,151 @@ export default function OrdersPage() {
   );
 }
 
+async function createExpenseRecord(visitId, record, orderId = null) {
+  const isAdvance = record.paymentMethod === "advance";
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from("expense_records").insert({
+    visit_id: visitId || null,
+    order_id: orderId || record.orderId || null,
+    technician_id: record.technicianId || null,
+    type: record.type,
+    label: record.label,
+    qty: Number(record.qty) || 0,
+    unit_price: Number(record.unitPrice) || 0,
+    amount: (Number(record.qty) || 0) * (Number(record.unitPrice) || 0),
+    payment_method: record.paymentMethod,
+    payer_name: record.paymentMethod === "advance" ? (record.payerName || null) : null,
+    is_settled: isAdvance ? true : !!record.isSettled,
+    settled_at: isAdvance ? now : (record.isSettled ? (record.settledAt || now) : null),
+    notes: record.notes || null,
+  }).select().single();
+  if (error) throw error;
+  const expenseRecord = expenseRecordFromDb(data);
+  if (isAdvance) await syncExpenseAdvance(expenseRecord, null);
+  return expenseRecord;
+}
+
+async function updateExpenseRecord(id, record) {
+  const { data: previousRow, error: previousError } = await supabase
+    .from("expense_records")
+    .select("*")
+    .eq("id", id)
+    .single();
+  if (previousError) throw previousError;
+  const previousRecord = expenseRecordFromDb(previousRow);
+  const isAdvance = record.paymentMethod === "advance";
+  const leavingAdvance = previousRecord.paymentMethod === "advance" && !isAdvance;
+  const now = new Date().toISOString();
+  const { data, error } = await supabase.from("expense_records").update({
+    type: record.type,
+    order_id: record.orderId || previousRecord.orderId || null,
+    technician_id: record.technicianId || null,
+    label: record.label,
+    qty: Number(record.qty) || 0,
+    unit_price: Number(record.unitPrice) || 0,
+    amount: (Number(record.qty) || 0) * (Number(record.unitPrice) || 0),
+    payment_method: record.paymentMethod,
+    payer_name: record.paymentMethod === "advance" ? (record.payerName || null) : null,
+    is_settled: isAdvance ? true : leavingAdvance ? !!previousRecord.isSettled : !!record.isSettled,
+    settled_at: isAdvance ? (previousRecord.isSettled && previousRecord.settledAt ? previousRecord.settledAt : now) : leavingAdvance ? previousRecord.settledAt : (record.isSettled ? (record.settledAt || now) : null),
+    notes: record.notes || null,
+    updated_at: new Date().toISOString(),
+  }).eq("id", id).select().single();
+  if (error) throw error;
+  const expenseRecord = expenseRecordFromDb(data);
+  await syncExpenseAdvance(expenseRecord, previousRecord);
+  return expenseRecord;
+}
+
+async function deleteExpenseRecord(id) {
+  const { error } = await supabase.from("expense_records").delete().eq("id", id);
+  if (error) throw error;
+}
+
+async function unsettleExpenseRecord(id) {
+  const { data, error } = await supabase.from("expense_records").update({
+    is_settled: false,
+    settled_at: null,
+    updated_at: new Date().toISOString(),
+  }).eq("id", id).select().single();
+  if (error) throw error;
+  return expenseRecordFromDb(data);
+}
+
+async function syncExpenseAdvance(expenseRecord, previousRecord) {
+  const wasAdvance = previousRecord?.paymentMethod === "advance";
+  const isAdvance = expenseRecord.paymentMethod === "advance";
+
+  if (wasAdvance && !isAdvance) {
+    const { error } = await supabase.from("advances").delete().eq("expense_record_id", expenseRecord.id);
+    if (error) throw error;
+    return;
+  }
+
+  if (!isAdvance) return;
+
+  let orderId = expenseRecord.orderId || previousRecord?.orderId || null;
+  if (!orderId && expenseRecord.visitId) {
+    const { data: visit, error: visitError } = await supabase
+      .from("visits")
+      .select("order_id")
+      .eq("id", expenseRecord.visitId)
+      .single();
+    if (visitError) throw visitError;
+    orderId = visit.order_id;
+  }
+  if (!orderId) throw new Error("费用记录缺少 order_id，无法创建垫付记录");
+
+  const { data: order, error: orderError } = await supabase
+    .from("orders")
+    .select("id, city, mall, brand, store_id")
+    .eq("id", orderId)
+    .single();
+  if (orderError) throw orderError;
+
+  let storeName = "";
+  if (order.store_id) {
+    const { data: store, error: storeError } = await supabase
+      .from("stores")
+      .select("store_name")
+      .eq("id", order.store_id)
+      .maybeSingle();
+    if (storeError) throw storeError;
+    storeName = store?.store_name || "";
+  }
+  const location = storeName || [order.city, order.brand, order.mall].filter(Boolean).join(" · ") || "未命名门店";
+  const typeLabel = expenseRecord.type === "insurance" ? "保险费" : expenseRecord.type === "technician_fee" ? "师傅费用" : "其他费用";
+  const reason = `${location} - ${typeLabel}：${expenseRecord.label}`;
+  const advanceData = {
+    employee_name: expenseRecord.payerName,
+    amount: Number(expenseRecord.amount) || 0,
+    reason,
+    order_id: orderId,
+    reimbursed: false,
+    expense_record_id: expenseRecord.id,
+  };
+
+  const { data: existing, error: existingError } = await supabase
+    .from("advances")
+    .select("id")
+    .eq("expense_record_id", expenseRecord.id)
+    .maybeSingle();
+  if (existingError) throw existingError;
+
+  if (existing) {
+    const { error } = await supabase.from("advances").update({
+      employee_name: advanceData.employee_name,
+      amount: advanceData.amount,
+      reason: advanceData.reason,
+      order_id: advanceData.order_id,
+    }).eq("id", existing.id);
+    if (error) throw error;
+  } else {
+    const { error } = await supabase.from("advances").insert(advanceData);
+    if (error) throw error;
+  }
+}
+
 function OrdersView({ userEmail }) {
   const [orders, setOrders] = useState([]);
   const [technicians, setTechnicians] = useState([]);
@@ -188,12 +333,15 @@ function OrdersView({ userEmail }) {
   const [employees, setEmployees] = useState([]);
   const [cities, setCities] = useState([]);
   const [brands, setBrands] = useState([]);
+  const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [followerFilter, setFollowerFilter] = useState("all");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [successMsg, setSuccessMsg] = useState("");
   const [showNewOrder, setShowNewOrder] = useState(false);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const [exportTimeType, setExportTimeType] = useState("report");
@@ -232,7 +380,21 @@ function OrdersView({ userEmail }) {
     fetchEmployees();
     fetchVocabulary("cities", setCities);
     fetchVocabulary("brands", setBrands);
+    fetchStores();
   }, []);
+
+  useEffect(() => {
+    if (stores.length === 0) return;
+    setOrders((prev) => {
+      let changed = false;
+      const next = prev.map((order) => {
+        const store = stores.find((item) => item.id === order.storeId) || null;
+        if (order.store !== store) changed = true;
+        return changed ? { ...order, store } : order;
+      });
+      return changed ? next : prev;
+    });
+  }, [stores]);
 
   useEffect(() => {
     const openId = searchParams.get("open");
@@ -244,7 +406,7 @@ function OrdersView({ userEmail }) {
     try {
       const { data, error } = await supabase
         .from("orders")
-        .select("*, visits(*)")
+        .select("*, expense_records(*), visits(*, expense_records(*))")
         .order("report_time", { ascending: false });
       if (error) throw error;
       setOrders((data || []).map(orderFromDb));
@@ -296,6 +458,45 @@ function OrdersView({ userEmail }) {
     } catch (e) {
       setErrorMsg(`加载${table === "cities" ? "城市" : "品牌"}词条失败：` + (e.message || "未知错误"));
     }
+  }
+
+  async function fetchStores() {
+    try {
+      const { data, error } = await supabase
+        .from("stores")
+        .select("*")
+        .order("city")
+        .order("brand")
+        .order("mall")
+        .order("store_name");
+      if (error) throw error;
+      setStores(data || []);
+    } catch (e) {
+      // migration_v9 尚未执行时，历史工单仍使用原有文本字段。
+    }
+  }
+
+  async function findStore(city, brand, mall) {
+    if ([city, brand, mall].some((value) => !value.trim())) return null;
+    const cached = stores.find((store) => store.city === city.trim() && store.brand === brand.trim() && store.mall === mall.trim());
+    if (cached) return cached;
+    const { data, error } = await supabase
+      .from("stores")
+      .select("*")
+      .eq("city", city.trim())
+      .eq("brand", brand.trim())
+      .eq("mall", mall.trim())
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    return data || null;
+  }
+
+  async function createStore(data) {
+    const { data: row, error } = await supabase.from("stores").insert(data).select().single();
+    if (error) throw error;
+    setStores((prev) => [...prev, row]);
+    return row;
   }
 
   async function addVocabulary(table, value, setter) {
@@ -382,8 +583,17 @@ function OrdersView({ userEmail }) {
         data.brand ? addVocabulary("brands", data.brand, setBrands) : null,
       ]);
       if ((data.city && !cityItem) || (data.brand && !brandItem)) throw new Error("城市或品牌词条保存失败");
-      const { count } = await supabase.from("orders").select("id", { count: "exact", head: true });
-      const ticketNo = `KT-${String((count || 0) + 1).padStart(4, "0")}`;
+      const reportTime = data.reportTime || new Date().toISOString();
+      const reportDate = new Date(reportTime);
+      const reportPrefix = `KT${reportDate.getFullYear()}${String(reportDate.getMonth() + 1).padStart(2, "0")}${String(
+        reportDate.getDate()
+      ).padStart(2, "0")}${String(reportDate.getHours()).padStart(2, "0")}${String(reportDate.getMinutes()).padStart(2, "0")}`;
+      const { data: matchingTickets, error: ticketError } = await supabase
+        .from("orders")
+        .select("ticket_no")
+        .like("ticket_no", `${reportPrefix}%`);
+      if (ticketError) throw ticketError;
+      const ticketNo = ticketNoFromReportTime(reportTime, (matchingTickets || []).map((row) => row.ticket_no));
       const { data: row, error } = await supabase
         .from("orders")
         .insert({
@@ -396,7 +606,7 @@ function OrdersView({ userEmail }) {
           issue_desc: data.issueDesc,
           address: data.address || null,
           notes: data.notes || null,
-          report_time: data.reportTime,
+          report_time: reportTime,
           expected_visit_time: data.expectedVisitTime || null,
           status: data.status || "待核实",
           completed_at: data.status === "已完成" ? new Date().toISOString() : null,
@@ -405,14 +615,15 @@ function OrdersView({ userEmail }) {
           client_id: data.clientId || null,
           follower_id: data.followerId || null,
           assigned_technician_id: data.assignedTechnicianId || null,
-          insurance_enabled: !!data.insuranceEnabled,
-          insurance_type: data.insuranceEnabled ? data.insuranceType || null : null,
-          insurance_amount: data.insuranceEnabled ? data.insuranceAmount || null : null,
+          store_id: data.storeId || null,
         })
         .select()
         .single();
       if (error) throw error;
-      const newOrder = orderFromDb({ ...row, visits: [] });
+      const newOrder = {
+        ...orderFromDb({ ...row, visits: [] }),
+        store: stores.find((store) => store.id === data.storeId) || null,
+      };
       setOrders((prev) => [newOrder, ...prev].sort((a, b) => new Date(b.reportTime) - new Date(a.reportTime)));
       setShowNewOrder(false);
       setSelectedId(newOrder.id);
@@ -486,12 +697,13 @@ function OrdersView({ userEmail }) {
           technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
-          cost_items: visit.costItems || [],
           created_by: userEmail,
         })
         .select()
         .single();
       if (error) throw error;
+
+      const expenseRecords = await saveExpenseRecords(row.id, visit.expenseRecords || [], orderId);
 
       const order = orders.find((o) => o.id === orderId);
       let nextStatus = order ? order.status : "维修中";
@@ -507,7 +719,7 @@ function OrdersView({ userEmail }) {
       }
       await supabase.from("orders").update(completionPatch).eq("id", orderId);
 
-      const newVisit = visitFromDb(row);
+      const newVisit = { ...visitFromDb(row), expenseRecords };
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
@@ -541,7 +753,6 @@ function OrdersView({ userEmail }) {
           technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
-          cost_items: visit.costItems || [],
         })
         .eq("id", visitId);
       if (error) throw error;
@@ -557,6 +768,36 @@ function OrdersView({ userEmail }) {
     } catch (e) {
       setErrorMsg("修改上门记录失败：" + (e.message || "未知错误"));
     }
+  }
+
+  async function saveExpenseRecords(visitId, records, orderId, replaceExisting = false) {
+    if (replaceExisting) {
+      const { error } = await supabase.from("expense_records").delete().eq("visit_id", visitId);
+      if (error) throw error;
+    }
+    if (!records.length) return [];
+    const rows = records.map((record) => ({
+      visit_id: visitId,
+      order_id: orderId,
+      technician_id: record.technicianId || null,
+      type: record.type,
+      label: record.label,
+      qty: Number(record.qty) || 0,
+      unit_price: Number(record.unitPrice) || 0,
+      amount: (Number(record.qty) || 0) * (Number(record.unitPrice) || 0),
+      payment_method: record.paymentMethod,
+      payer_name: record.paymentMethod === "advance" ? (record.payerName || null) : null,
+      is_settled: record.paymentMethod === "advance" ? true : !!record.isSettled,
+      settled_at: record.paymentMethod === "advance" ? (record.settledAt || new Date().toISOString()) : (record.isSettled ? (record.settledAt || new Date().toISOString()) : null),
+      notes: record.notes || null,
+    }));
+    const { data, error } = await supabase.from("expense_records").insert(rows).select();
+    if (error) throw error;
+    const expenseRecords = (data || []).map(expenseRecordFromDb);
+    await Promise.all(expenseRecords.map((expenseRecord) => (
+      expenseRecord.paymentMethod === "advance" ? syncExpenseAdvance(expenseRecord, null) : null
+    )));
+    return expenseRecords;
   }
 
   async function deleteVisit(orderId, visitId) {
@@ -578,7 +819,8 @@ function OrdersView({ userEmail }) {
       if (followerFilter !== "all" && o.followerId !== followerFilter) return false;
       if (search.trim()) {
         const s = search.trim().toLowerCase();
-        const hay = `${o.city || ""} ${o.mall} ${o.brand || ""} ${o.issueDesc} ${o.ticketNo}`.toLowerCase();
+        const storeDisplay = orderStoreDisplay(o);
+        const hay = `${storeDisplay.city} ${storeDisplay.mall} ${storeDisplay.brand} ${storeDisplay.storeName} ${o.issueDesc} ${o.ticketNo}`.toLowerCase();
         if (!hay.includes(s)) return false;
       }
       return true;
@@ -626,6 +868,47 @@ function OrdersView({ userEmail }) {
 
   const selected = orders.find((o) => o.id === selectedId) || null;
 
+  const storePreview = useMemo(() => {
+    const groups = new Map();
+    const skipped = [];
+    for (const order of orders) {
+      if (order.storeId) continue;
+      const city = (order.city || "").trim();
+      const brand = (order.brand || "").trim();
+      const mall = (order.mall || "").trim();
+      const missing = [!city && "city", !brand && "brand", !mall && "mall"].filter(Boolean);
+      if (missing.length > 0) {
+        skipped.push({ order, missing });
+        continue;
+      }
+      const key = storeIdentity(city, brand, mall);
+      const current = groups.get(key) || { city, brand, mall, count: 0 };
+      current.count += 1;
+      groups.set(key, current);
+    }
+    return {
+      groups: Array.from(groups.values()).sort((a, b) => a.city.localeCompare(b.city, "zh-CN") || a.brand.localeCompare(b.brand, "zh-CN") || a.mall.localeCompare(b.mall, "zh-CN")),
+      skipped,
+    };
+  }, [orders]);
+
+  async function deleteOrder(order) {
+    try {
+      const { error: visitsError } = await supabase.from("visits").delete().eq("order_id", order.id);
+      if (visitsError) throw new Error(`删除服务记录失败：${visitsError.message || "未知错误"}`);
+      const { error: orderError } = await supabase.from("orders").delete().eq("id", order.id);
+      if (orderError) throw new Error(`删除工单失败：${orderError.message || "未知错误"}`);
+      setOrders((prev) => prev.filter((item) => item.id !== order.id));
+      setSelectedId(null);
+      setDeleteTarget(null);
+      setSuccessMsg(`工单 ${order.ticketNo || ""} 已删除`);
+      setErrorMsg("");
+    } catch (e) {
+      setDeleteTarget(null);
+      setErrorMsg(e.message || "删除工单失败");
+    }
+  }
+
   return (
     <div style={styles.page}>
       <div style={styles.headerRow}>
@@ -660,6 +943,24 @@ function OrdersView({ userEmail }) {
           <AlertTriangle size={14} /> {errorMsg}
         </div>
       )}
+      {successMsg && <div style={styles.successBar}>{successMsg}</div>}
+
+      <div style={styles.previewBox}>
+        <div style={styles.previewTitle}>旧工单自动生成门店预览（只读）</div>
+        {storePreview.groups.length === 0 ? (
+          <div style={styles.metaHint}>没有符合条件的未关联门店工单</div>
+        ) : (
+          <div style={styles.previewList}>
+            <div>将新建门店：</div>
+            {storePreview.groups.map((group, index) => (
+              <div key={`${group.city}-${group.brand}-${group.mall}`}>
+                {index + 1}. {generateStoreName(group.city, group.brand, group.mall)} — 影响 {group.count} 条工单
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={styles.metaHint}>跳过（缺少 city / brand / mall）：{storePreview.skipped.length} 条工单</div>
+      </div>
 
       <div style={styles.filterBar}>
         <div style={styles.tabs}>
@@ -796,6 +1097,7 @@ function OrdersView({ userEmail }) {
           technicians={technicians}
           feePresets={feePresets}
           clients={clients}
+          stores={stores}
           cities={cities}
           employees={employees}
           onClose={() => {
@@ -812,6 +1114,8 @@ function OrdersView({ userEmail }) {
           onAddFeePreset={addFeePreset}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
+          onFindStore={findStore}
+          onCreateStore={createStore}
           onPatch={(camel) => patchOrder(selected.id, camel)}
           onSaveQuotes={(items) => saveQuotes(selected.id, items)}
           onToggleClientSettled={() => toggleClientSettled(selected)}
@@ -822,6 +1126,19 @@ function OrdersView({ userEmail }) {
           onAddVisit={(v) => addVisit(selected.id, v)}
           onUpdateVisit={(visitId, v) => updateVisit(selected.id, visitId, v)}
           onDeleteVisit={(visitId) => deleteVisit(selected.id, visitId)}
+          onCreateExpense={createExpenseRecord}
+          onUpdateExpense={updateExpenseRecord}
+          onDeleteExpense={deleteExpenseRecord}
+          onUnsettleExpense={unsettleExpenseRecord}
+          onExpenseRecordsChange={(records) => setOrders((prev) => prev.map((item) => item.id === selected.id ? { ...item, expenseRecords: records } : item))}
+          onDeleteOrder={() => setDeleteTarget(selected)}
+        />
+      )}
+      {deleteTarget && (
+        <DeleteOrderConfirm
+          order={deleteTarget}
+          onCancel={() => setDeleteTarget(null)}
+          onConfirm={() => deleteOrder(deleteTarget)}
         />
       )}
 
@@ -834,12 +1151,15 @@ function OrdersView({ userEmail }) {
            technicians={technicians}
            cities={cities}
            brands={brands}
+           stores={stores}
            onCreateCity={(name) => addVocabulary("cities", name, setCities)}
            onCreateBrand={(name) => addVocabulary("brands", name, setBrands)}
            onAddTechnician={addTechnician}
           employees={employees}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
+           onFindStore={findStore}
+           onCreateStore={createStore}
         />
       )}
     </div>
@@ -853,6 +1173,11 @@ function OrderCard({ order, technicians, clients, onClick }) {
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const client = clients.find((c) => c.id === order.clientId);
   const profit = orderProfit(order);
+  const technicianRecords = [
+    ...(order.expenseRecords || []),
+    ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
+  ].filter((record, index, records) => record.type === "technician_fee" && records.findIndex((item) => item.id === record.id) === index);
+  const technicianSettled = technicianRecords.length > 0 && technicianRecords.every((record) => record.isSettled);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -878,13 +1203,8 @@ function OrderCard({ order, technicians, clients, onClick }) {
             <span>⭐</span> 完工 {fmtDate(order.completedAt)}
           </span>
         )}
-        {order.visits.length > 0 && (
-          <span style={styles.cardMeta}>
-            <Wrench size={12} /> 已上门 {order.visits.length} 次
-          </span>
-        )}
       </div>
-      {(tech || client || profit !== 0) && (
+      {(tech || client || profit !== 0 || order.clientSettled !== undefined) && (
         <div style={styles.cardMetaRow}>
           {client && <span style={styles.cardMeta}>甲方：{client.name}</span>}
           {tech && (
@@ -897,9 +1217,12 @@ function OrderCard({ order, technicians, clients, onClick }) {
               <DollarSign size={12} /> 利润 ¥{profit}
             </span>
           )}
-          {order.status === "已完成" && !order.clientSettled && (
-            <span style={{ ...styles.cardMeta, color: "#A5661A" }}>未结算</span>
-          )}
+          <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
+            甲方{order.clientSettled ? "已结算" : "未结算"}
+          </span>
+          <span style={{ ...styles.settlementBadge, ...(technicianSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
+            师傅费用{technicianSettled ? "已结清" : "未结清"}
+          </span>
         </div>
       )}
       {lastVisit && (
@@ -1078,19 +1401,24 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
 }
 
 function DetailPanel({
-  order, orders, technicians, feePresets, clients, cities, employees,
+  order, orders, technicians, feePresets, clients, cities, employees, stores,
   onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
   onAddFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
   visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm,
   onAddVisit, onUpdateVisit, onDeleteVisit,
+  onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense,
+  onExpenseRecordsChange,
+  onDeleteOrder,
 }) {
   const relatedOrder = order.relatedOrderId ? orders.find((o) => o.id === order.relatedOrderId) : null;
   const assignedTech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const client = clients.find((c) => c.id === order.clientId);
   const follower = employees.find((e) => e.id === order.followerId);
+  const store = stores.find((item) => item.id === order.storeId) || order.store || null;
   const quoteItems = orderQuoteItems(order);
   const totalCharge = itemsChargeTotal(quoteItems);
   const showWorkOrder = WORK_ORDER_VISIBLE_STATUSES.includes(order.status) || order.needWorkOrder;
+  const insuranceRecords = (order.expenseRecords || []).filter((record) => record.type === "insurance");
 
   const [city, setCity] = useState(order.city || "");
   const [mall, setMall] = useState(order.mall || "");
@@ -1192,6 +1520,16 @@ function DetailPanel({
                 <input style={styles.input} value={brand} onChange={(e) => setBrand(e.target.value)} placeholder="如：满记甜品" />
               </Field>
             </div>
+            {store && (
+              <div style={styles.storeInfoBox}>
+                <div style={styles.storeInfoTitle}>门店档案</div>
+                <div>{store.city} · {store.brand} · {store.mall} · {store.store_name}</div>
+                {store.address && <div>地址：{store.address}</div>}
+                {store.contact_name && <div>联系人：{store.contact_name}{store.contact_phone ? ` · ${store.contact_phone}` : ""}</div>}
+                {store.special_requirements && <div style={styles.storeWarning}>特殊要求：{store.special_requirements}</div>}
+                {store.notes && <div>备注：{store.notes}</div>}
+              </div>
+            )}
             <div style={styles.formRow2}>
               <Field label="报修时间">
                 <input
@@ -1359,7 +1697,7 @@ function DetailPanel({
               </div>
 
               {visitFormMode && (
-                <VisitForm
+                  <VisitForm
                   key={visitFormMode === "new" ? "new" : visitFormMode.id}
                   initialVisit={visitFormMode === "new" ? null : visitFormMode}
                   onCancel={onCancelVisitForm}
@@ -1367,6 +1705,12 @@ function DetailPanel({
                     if (visitFormMode === "new") onAddVisit(v);
                     else onUpdateVisit(visitFormMode.id, v);
                   }}
+                  visitId={visitFormMode === "new" ? null : visitFormMode.id}
+                  orderId={selected.id}
+                  employees={employees}
+                  onCreateExpense={createExpenseRecord}
+                  onUpdateExpense={updateExpenseRecord}
+                  onDeleteExpense={deleteExpenseRecord}
                   technicians={technicians}
                   onAddTechnician={onAddTechnician}
                 />
@@ -1379,7 +1723,7 @@ function DetailPanel({
                   {order.visits.map((v, idx) => {
                     const m = resultMeta(v.resultType);
                     const isEditing = visitFormMode && visitFormMode !== "new" && visitFormMode.id === v.id;
-                    const technicianCost = visitCostTotal(v);
+                    const expenseTotal = (v.expenseRecords || []).reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
                     return (
                       <div key={v.id} style={styles.timelineItem}>
                         <div style={styles.timelineRail}>
@@ -1402,7 +1746,7 @@ function DetailPanel({
                           <div style={styles.timelineMaster}><Wrench size={12} /> {v.master}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
                           <div style={styles.serviceRecordMeta}>服务类型：{v.serviceType || "历史上门记录"}</div>
                           {v.serviceContent && <div style={styles.serviceRecordContent}>服务内容：{v.serviceContent}</div>}
-                          {technicianCost > 0 && <div style={styles.serviceRecordCost}>师傅费用：¥{technicianCost}</div>}
+                          {expenseTotal > 0 && <div style={styles.serviceRecordCost}>本次支出：¥{expenseTotal}</div>}
                           {v.note && <div style={styles.timelineNote}>{v.note}</div>}
                           <div style={styles.timelineBy}>登记人：{v.createdBy || "—"}</div>
                         </div>
@@ -1414,39 +1758,23 @@ function DetailPanel({
             </div>
           </div>
 
-          {assignedTech ? (
-            <div style={styles.sectionBlock}>
-              <div style={styles.sectionTitle}><Shield size={13} /> 投保信息</div>
-              <div style={styles.chipRow}>
-                {[false, true].map((v) => (
-                  <button
-                    key={String(v)}
-                    style={{ ...styles.resultChip, ...(!!order.insuranceEnabled === v ? styles.chipOn : {}) }}
-                    onClick={() => onPatch({ insuranceEnabled: v, insuranceType: v ? order.insuranceType : null, insuranceAmount: v ? order.insuranceAmount : null })}
-                  >
-                    {v ? "有" : "无"}
-                  </button>
-                ))}
-              </div>
-              {order.insuranceEnabled && (
-                <>
-                  <div style={{ ...styles.chipRow, marginTop: 8 }}>
-                    {INSURANCE_TYPES.map((t) => (
-                      <button key={t.key} style={{ ...styles.resultChip, ...(order.insuranceType === t.key ? styles.chipOn : {}) }} onClick={() => onPatch({ insuranceType: t.key })}>{t.label}</button>
-                    ))}
-                  </div>
-                  <Field label="投保金额">
-                    <input style={styles.input} type="number" defaultValue={order.insuranceAmount || ""} key={`ins-${order.id}-${order.insuranceAmount}`} onBlur={(e) => onPatch({ insuranceAmount: e.target.value === "" ? null : Number(e.target.value) })} placeholder="金额" />
-                  </Field>
-                </>
-              )}
-            </div>
-          ) : (
-            <div style={styles.sectionBlock}>
-              <div style={styles.sectionTitle}><Shield size={13} /> 投保信息</div>
-              <div style={styles.unassignedHint}>指派师傅后可填写投保信息</div>
-            </div>
-          )}
+          <div style={styles.sectionBlock}>
+            <div style={styles.sectionTitle}>保险费用</div>
+            <ExpenseRecordsEditor
+              records={insuranceRecords}
+              onChange={(records) => onExpenseRecordsChange([...(order.expenseRecords || []).filter((record) => record.type !== "insurance"), ...records])}
+              orderId={order.id}
+              employees={employees}
+              technicians={technicians}
+              fixedType="insurance"
+              hideMonthly
+              onCreateExpense={onCreateExpense}
+              onUpdateExpense={onUpdateExpense}
+              onDeleteExpense={onDeleteExpense}
+              onUnsettleExpense={onUnsettleExpense}
+            />
+          </div>
+
           <div style={styles.sectionBlock}>
             <div style={styles.sectionTitle}><DollarSign size={13} /> 向甲方报价管理</div>
             {totalCharge > 0 && (
@@ -1474,6 +1802,10 @@ function DetailPanel({
               orders={orders}
               onAddPreset={onAddFeePreset}
               onSave={onSaveQuotes}
+              locked={!!order.clientSettled}
+              onUnlock={() => {
+                if (window.confirm("甲方已结算，确认撤销结算并允许修改报价吗？")) onPatch({ clientSettled: false, clientSettledAt: null });
+              }}
             />
           </div>
 
@@ -1527,6 +1859,35 @@ function DetailPanel({
             </div>
           )}
 
+          <div style={styles.dangerZone}>
+            <div style={styles.dangerTitle}>危险操作</div>
+            <button type="button" style={styles.deleteOrderBtn} onClick={onDeleteOrder}>
+              <Trash2 size={14} /> 删除工单
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeleteOrderConfirm({ order, onCancel, onConfirm }) {
+  return (
+    <div style={styles.overlay} onClick={onCancel}>
+      <div style={styles.confirmModal} onClick={(event) => event.stopPropagation()}>
+        <div style={styles.confirmTitle}>确认硬删除工单？</div>
+        <div style={styles.confirmWarning}>此操作不可恢复，并会同时删除该工单关联的所有服务记录（visits）。</div>
+        <div style={styles.confirmInfo}>
+          <div>工单号：{order.ticketNo || "—"}</div>
+          <div>城市：{order.city || "—"}</div>
+          <div>商场：{order.mall || "—"}</div>
+          <div>报修时间：{order.reportTime ? fmtDate(order.reportTime) : "—"}</div>
+          <div>服务记录：{order.visits?.length || 0} 条</div>
+        </div>
+        <div style={styles.confirmActions}>
+          <button type="button" style={styles.ghostBtn} onClick={onCancel}>取消</button>
+          <button type="button" style={styles.confirmDeleteBtn} onClick={onConfirm}>确认不可恢复删除</button>
         </div>
       </div>
     </div>
@@ -1620,7 +1981,7 @@ function CityInput({ value, cities = [], onChange, onCreate = async () => null }
   return <SearchableCreatable label="城市" value={value} items={cities} onChange={onChange} onCreate={onCreate} placeholder="搜索或输入城市，如上海 / sh" />;
 }
 
-function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSave }) {
+function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSave, locked = false, onUnlock }) {
   const [items, setItems] = useState(() => (initialItems || []).map((it) => ({ ...it })));
   const [label, setLabel] = useState("");
   const [qty, setQty] = useState("1");
@@ -1645,7 +2006,7 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
 
   return (
     <div>
-      {feePresets.length > 0 && (
+      {!locked && feePresets.length > 0 && (
         <div style={styles.feePresetRow}>
           {feePresets.map((p) => {
             const cu = p.charge_unit ?? (p.kind === "charge" ? p.amount : 0) ?? 0;
@@ -1661,7 +2022,7 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
           })}
         </div>
       )}
-      <div style={styles.quoteAddGrid}>
+      {!locked && <div style={styles.quoteAddGrid}>
         <input style={styles.input} placeholder="项目名，如：清洗" value={label} onChange={(e) => setLabel(e.target.value)} />
         <input style={styles.input} type="number" placeholder="数量" value={qty} onChange={(e) => setQty(e.target.value)} />
         <input style={styles.input} type="number" placeholder="甲方单价" value={chargeUnit} onChange={(e) => setChargeUnit(e.target.value)} />
@@ -1678,7 +2039,7 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
         >
           <Plus size={12} /> 添加
         </button>
-      </div>
+      </div>}
       {hints.length > 0 && (
         <div style={styles.priceRefBox}>
           <div style={styles.priceRefTitle}>历史参考（同一项目的甲方价）</div>
@@ -1699,21 +2060,27 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
                 style={{ ...styles.input, flex: 1.4 }}
                 value={it.label}
                 onChange={(e) => updateRow(idx, { label: e.target.value })}
+                disabled={locked}
+                readOnly={locked}
               />
               <input
                 style={{ ...styles.input, width: 52 }}
                 type="number"
                 value={it.qty}
                 onChange={(e) => updateRow(idx, { qty: Number(e.target.value) || 0 })}
+                disabled={locked}
+                readOnly={locked}
               />
               <input
                 style={{ ...styles.input, width: 72 }}
                 type="number"
                 value={it.chargeUnit}
                 onChange={(e) => updateRow(idx, { chargeUnit: Number(e.target.value) || 0 })}
+                disabled={locked}
+                readOnly={locked}
               />
               <span style={styles.quoteSub}>合计 ¥{lineCharge(it)}</span>
-              <button style={styles.tinyIconBtn} onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}>
+              <button disabled={locked} style={styles.tinyIconBtn} onClick={() => setItems((prev) => prev.filter((_, i) => i !== idx))}>
                 <X size={12} />
               </button>
             </div>
@@ -1724,21 +2091,178 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
         </div>
       )}
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-        <button style={styles.primaryBtn} onClick={() => onSave(items)}>保存报价</button>
+        {locked ? <button type="button" style={styles.ghostBtn} onClick={onUnlock}>撤销甲方结算后修改</button> : <button style={styles.primaryBtn} onClick={() => onSave(items)}>保存报价</button>}
       </div>
     </div>
   );
 }
 
-function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnician }) {
+const EXPENSE_TYPE_LABELS = {
+  technician_fee: "师傅费用",
+  insurance: "保险费",
+  other: "其他",
+};
+
+const EXPENSE_TYPE_STYLES = {
+  technician_fee: { background: "#E3F0F1", color: "#145560" },
+  insurance: { background: "#FBEEDD", color: "#A5661A" },
+  other: { background: "#EDEFEE", color: "#4C6169" },
+};
+
+function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense }) {
+  const [editingId, setEditingId] = useState(null);
+  const [draft, setDraft] = useState(() => emptyExpenseRecord());
+
+  function emptyExpenseRecord() {
+    return {
+      type: fixedType || "technician_fee",
+      label: fixedType === "insurance" ? "保险费" : "",
+      qty: 1,
+      unitPrice: "",
+      paymentMethod: null,
+      payerName: "",
+      isSettled: false,
+      settledAt: null,
+      notes: "",
+    };
+  }
+
+  function beginNew() {
+    setEditingId("new");
+    setDraft(emptyExpenseRecord());
+  }
+
+  function beginEdit(record) {
+    setEditingId(record.id);
+    setDraft({ ...record, qty: record.qty ?? 1, unitPrice: record.unitPrice ?? "", payerName: record.payerName || "", notes: record.notes || "" });
+  }
+
+  function updateDraft(key, value) {
+    setDraft((prev) => ({ ...prev, [key]: value }));
+  }
+
+  function saveDraft() {
+    if (!draft.label.trim() || draft.unitPrice === "") return;
+    if (draft.paymentMethod === "advance" && !draft.payerName.trim()) return;
+    const next = {
+      ...draft,
+      type: fixedType || draft.type,
+      orderId: orderId || draft.orderId || null,
+      technicianId: draft.technicianId || null,
+      label: draft.label.trim(),
+      qty: Number(draft.qty) || 0,
+      unitPrice: Number(draft.unitPrice) || 0,
+      amount: (Number(draft.qty) || 0) * (Number(draft.unitPrice) || 0),
+      payerName: draft.paymentMethod === "advance" ? draft.payerName.trim() : "",
+      settledAt: draft.isSettled ? (draft.settledAt || new Date().toISOString()) : null,
+      notes: draft.notes.trim(),
+    };
+    const save = editingId === "new"
+      ? ((visitId || orderId) ? onCreateExpense(visitId || null, next, orderId || null) : Promise.resolve(next))
+      : ((visitId || orderId) ? onUpdateExpense(editingId, next) : Promise.resolve({ ...records.find((record) => record.id === editingId), ...next }));
+    save.then((saved) => {
+      onChange(editingId === "new" ? [...records, saved] : records.map((record) => (record.id === editingId ? saved : record)));
+      setEditingId(null);
+    }).catch(() => {});
+  }
+
+  function removeRecord(id) {
+    if (visitId || orderId) {
+      onDeleteExpense(id).then(() => onChange(records.filter((record) => record.id !== id))).catch(() => {});
+    } else {
+      onChange(records.filter((record) => record.id !== id));
+    }
+  }
+
+  const draftAmount = (Number(draft.qty) || 0) * (Number(draft.unitPrice) || 0);
+  const total = records.reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+  const editingRecord = records.find((record) => record.id === editingId);
+  const amountLocked = !!editingRecord?.isSettled;
+
+  return (
+    <Field label="本次支出">
+      {records.length > 0 && (
+        <div style={styles.expenseList}>
+          {records.map((record) => (
+            <div key={record.id || `${record.label}-${record.amount}`} style={styles.expenseRow}>
+              <div style={styles.expenseMain}>
+                <span style={{ ...styles.expenseType, ...EXPENSE_TYPE_STYLES[record.type] }}>{EXPENSE_TYPE_LABELS[record.type] || "其他"}</span>
+                <strong>{record.label}</strong>
+                <span>{record.qty} × ¥{record.unitPrice} = ¥{record.amount}</span>
+                <span>{record.paymentMethod === "advance" ? `员工垫付：${record.payerName || "未填写"}` : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
+                <span style={record.isSettled ? styles.expenseSettled : styles.expenseUnsettled}>
+                  {record.isSettled ? `已结清${record.settledAt ? ` · ${fmtDate(record.settledAt)}` : ""}` : "未结清"}
+                </span>
+                {record.notes && <span style={styles.expenseNote}>{record.notes}</span>}
+              </div>
+              <div style={styles.expenseActions}>
+                <button type="button" style={styles.tinyIconBtn} onClick={() => beginEdit(record)} title="编辑"><Pencil size={12} /></button>
+                <button type="button" style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={() => removeRecord(record.id)} title="删除"><Trash2 size={12} /></button>
+              </div>
+            </div>
+          ))}
+          <div style={styles.serviceCostTotal}>本次支出小计：¥{total}</div>
+        </div>
+      )}
+      {editingId && (
+        <div style={styles.expenseEditor}>
+          <div style={styles.expenseFormGrid}>
+            {fixedType ? <div style={{ ...styles.input, background: "#F4F7F6" }}>{EXPENSE_TYPE_LABELS[fixedType]}</div> : (
+              <select style={styles.input} value={draft.type} onChange={(e) => updateDraft("type", e.target.value)}>
+                <option value="technician_fee">师傅费用</option>
+                <option value="insurance">保险费</option>
+                <option value="other">其他</option>
+              </select>
+            )}
+            <input style={styles.input} value={draft.label} onChange={(e) => updateDraft("label", e.target.value)} placeholder="费用名称" />
+            <input style={styles.input} type="number" min="0" value={draft.qty} onChange={(e) => updateDraft("qty", e.target.value)} placeholder="数量" disabled={amountLocked} readOnly={amountLocked} />
+            <input style={styles.input} type="number" min="0" value={draft.unitPrice} onChange={(e) => updateDraft("unitPrice", e.target.value)} placeholder="单价" disabled={amountLocked} readOnly={amountLocked} />
+            <span style={styles.expenseAmountPreview}>金额 ¥{draftAmount}</span>
+          </div>
+          <div style={styles.expensePaymentRow}>
+            <label><input type="radio" checked={draft.paymentMethod === null} onChange={() => { updateDraft("paymentMethod", null); updateDraft("isSettled", false); }} /> 待定</label>
+            <label><input type="radio" checked={draft.paymentMethod === "advance"} onChange={() => { updateDraft("paymentMethod", "advance"); updateDraft("isSettled", true); }} /> 员工垫付</label>
+            {!hideMonthly && <label><input type="radio" checked={draft.paymentMethod === "monthly_settlement"} onChange={() => { updateDraft("paymentMethod", "monthly_settlement"); updateDraft("isSettled", false); }} /> 月结</label>}
+            {draft.paymentMethod === "advance" && (
+              <select
+                style={{ ...styles.input, width: 180 }}
+                value={draft.payerName}
+                onChange={(e) => updateDraft("payerName", e.target.value)}
+                required
+              >
+                <option value="">选择垫付人 *</option>
+                {employees.map((employee) => (
+                  <option key={employee.id} value={employee.name}>{employee.name}</option>
+                ))}
+              </select>
+            )}
+            {fixedType === "insurance" && (
+              <select style={{ ...styles.input, width: 180 }} value={draft.technicianId || ""} onChange={(e) => updateDraft("technicianId", e.target.value || null)}>
+                <option value="">关联师傅（选填）</option>
+                {technicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.name}</option>)}
+              </select>
+            )}
+            <label><input type="checkbox" checked={draft.paymentMethod === "advance" ? true : !!draft.isSettled} disabled={draft.paymentMethod !== "monthly_settlement"} onChange={(e) => updateDraft("isSettled", e.target.checked)} /> 已结清</label>
+          </div>
+          <input style={styles.input} value={draft.notes} onChange={(e) => updateDraft("notes", e.target.value)} placeholder="备注（选填）" />
+          <div style={styles.expenseEditorActions}>
+            {amountLocked && <button type="button" style={styles.ghostBtn} onClick={() => { if (window.confirm("该费用已结清，确认撤销结清并允许修改金额吗？")) onUnsettleExpense(editingId).then((saved) => { onChange(records.map((record) => record.id === editingId ? saved : record)); }).catch(() => {}); }}>撤销结清</button>}
+            <button type="button" style={styles.ghostBtn} onClick={() => setEditingId(null)}>取消</button>
+            <button type="button" style={styles.smallPrimaryBtn} onClick={saveDraft}>保存费用</button>
+          </div>
+        </div>
+      )}
+      {!editingId && <button type="button" style={styles.smallPrimaryBtn} onClick={beginNew}><Plus size={12} /> 新增支出</button>}
+    </Field>
+  );
+}
+
+function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense }) {
   const initTech = initialVisit ? technicians.find((t) => t.id === initialVisit.technicianId) : null;
   const [technician, setTechnician] = useState(initTech || null);
   const [serviceType, setServiceType] = useState(initialVisit?.serviceType || "");
   const [serviceContent, setServiceContent] = useState(initialVisit?.serviceContent || "");
-  const [costItems, setCostItems] = useState(() => (initialVisit?.costItems || []).map((item) => ({ ...item })));
-  const [costLabel, setCostLabel] = useState("");
-  const [costQty, setCostQty] = useState("1");
-  const [costUnitPrice, setCostUnitPrice] = useState("");
+  const [expenseRecords, setExpenseRecords] = useState(() => (initialVisit?.expenseRecords || []).map((record) => ({ ...record })));
   const [masterPhone, setMasterPhone] = useState(initialVisit?.masterPhone || "");
   const [freeMasterName, setFreeMasterName] = useState(initialVisit && !initTech ? initialVisit.master : "");
   const [visitTime, setVisitTime] = useState(() => {
@@ -1746,7 +2270,7 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
     base.setMinutes(base.getMinutes() - base.getTimezoneOffset());
     return base.toISOString().slice(0, 16);
   });
-  const [resultType, setResultType] = useState(initialVisit?.resultType || "resolved");
+  const [resultType, setResultType] = useState(initialVisit?.resultType || "scheduled");
   const [note, setNote] = useState(initialVisit?.note || "");
   const [err, setErr] = useState("");
 
@@ -1764,7 +2288,7 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
       serviceContent: serviceContent.trim(),
       visitTime: new Date(visitTime).toISOString(),
       resultType,
-      costItems,
+      expenseRecords,
       note: note.trim(),
     });
   }
@@ -1802,41 +2326,17 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
       <Field label="上门时间">
         <input style={styles.input} type="datetime-local" value={visitTime} onChange={(e) => setVisitTime(e.target.value)} />
       </Field>
-      <Field label="师傅费用">
-        <div style={styles.serviceCostAddRow}>
-          <input style={{ ...styles.input, flex: 1 }} value={costLabel} onChange={(e) => setCostLabel(e.target.value)} placeholder="费用项目，如：上门费" />
-          <input style={{ ...styles.input, width: 64 }} type="number" min="1" value={costQty} onChange={(e) => setCostQty(e.target.value)} placeholder="数量" />
-          <input style={{ ...styles.input, width: 100 }} type="number" value={costUnitPrice} onChange={(e) => setCostUnitPrice(e.target.value)} placeholder="单价" />
-          <button
-            type="button"
-            style={styles.smallPrimaryBtn}
-            onClick={() => {
-              if (!costLabel.trim() || costUnitPrice === "") return;
-              const item = { label: costLabel.trim(), qty: Number(costQty) || 1, unitPrice: Number(costUnitPrice) || 0 };
-              setCostItems((prev) => [...prev, { ...item, amount: costItemAmount(item) }]);
-              setCostLabel("");
-              setCostQty("1");
-              setCostUnitPrice("");
-            }}
-          >
-            <Plus size={12} /> 添加
-          </button>
-        </div>
-        {costItems.length > 0 && (
-          <div style={styles.serviceCostList}>
-            {costItems.map((item, index) => (
-              <div key={`${item.label}-${index}`} style={styles.serviceCostRow}>
-                <span>{item.label}</span>
-                <span>{costItemQty(item)}次 · ¥{costItemUnitPrice(item)} · ¥{costItemAmount(item)}</span>
-                <button type="button" style={styles.tinyIconBtn} onClick={() => setCostItems((prev) => prev.filter((_, i) => i !== index))}>
-                  <X size={12} />
-                </button>
-              </div>
-            ))}
-            <div style={styles.serviceCostTotal}>师傅费用合计 ¥{costItems.reduce((sum, item) => sum + costItemAmount(item), 0)}</div>
-          </div>
-        )}
-      </Field>
+      <ExpenseRecordsEditor
+        records={expenseRecords}
+        onChange={setExpenseRecords}
+        visitId={initialVisit?.id}
+        orderId={orderId}
+        employees={employees}
+        onCreateExpense={onCreateExpense}
+        onUpdateExpense={onUpdateExpense}
+        onDeleteExpense={onDeleteExpense}
+        onUnsettleExpense={onUnsettleExpense}
+      />
       <Field label="处理结果">
         <div style={styles.resultChips}>
           {RESULT_TYPES.map((r) => {
@@ -1867,7 +2367,6 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, onAddTechnic
       </Field>
       {err && <div style={styles.formErr}>{err}</div>}
       <div style={styles.formActions}>
-        <button style={styles.ghostBtn} onClick={onCancel}>取消</button>
         <button style={styles.primaryBtn} onClick={submit}>{initialVisit ? "保存修改" : "保存记录"}</button>
       </div>
     </div>
@@ -1883,10 +2382,19 @@ function Field({ label, children }) {
   );
 }
 
-function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee }) {
+function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], stores = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee, onFindStore, onCreateStore }) {
   const [city, setCity] = useState("");
   const [mall, setMall] = useState("");
   const [brand, setBrand] = useState("");
+  const [storeName, setStoreName] = useState("");
+  const [selectedStore, setSelectedStore] = useState(null);
+  const [storeMessage, setStoreMessage] = useState("");
+  const [showStoreForm, setShowStoreForm] = useState(false);
+  const [storeAddress, setStoreAddress] = useState("");
+  const [storeContactName, setStoreContactName] = useState("");
+  const [storeContactPhone, setStoreContactPhone] = useState("");
+  const [storeRequirements, setStoreRequirements] = useState("");
+  const [storeNotes, setStoreNotes] = useState("");
   const [assignedTechnicianId, setAssignedTechnicianId] = useState(null);
   const [status, setStatus] = useState("待核实");
   const [expectedVisitTime, setExpectedVisitTime] = useState("");
@@ -1898,9 +2406,6 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const [relatedOrderId, setRelatedOrderId] = useState(null);
-  const [insuranceEnabled, setInsuranceEnabled] = useState(false);
-  const [insuranceType, setInsuranceType] = useState("public");
-  const [insuranceAmount, setInsuranceAmount] = useState("");
   const [reportTime, setReportTime] = useState(() => {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -1908,6 +2413,31 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
   });
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!city.trim() || !brand.trim() || !mall.trim()) {
+      setSelectedStore(null);
+      setStoreMessage("");
+      setStoreName("");
+      return undefined;
+    }
+    const timer = setTimeout(async () => {
+      try {
+        const store = await onFindStore(city, brand, mall);
+        if (cancelled) return;
+        setSelectedStore(store);
+        setStoreName(store?.store_name || generateStoreName(city.trim(), brand.trim(), mall.trim()));
+        setStoreMessage(store ? "已找到历史门店" : "未找到对应门店");
+      } catch (e) {
+        if (!cancelled) setStoreMessage("门店查询失败，请稍后重试");
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [city, brand, mall, onFindStore]);
 
   async function submit() {
     if (!mall.trim() || !issueDesc.trim()) {
@@ -1935,9 +2465,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       notes: notes.trim(),
       reportTime: new Date(reportTime).toISOString(),
       relatedOrderId,
-      insuranceEnabled,
-      insuranceType,
-      insuranceAmount: insuranceAmount === "" ? null : Number(insuranceAmount),
+      storeId: selectedStore?.id || null,
     });
     setSubmitting(false);
   }
@@ -1950,7 +2478,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
           <button style={styles.iconBtn} onClick={onClose}><X size={18} /></button>
         </div>
         <div style={styles.modalBody}>
-          <div style={styles.formRow3}>
+          <div style={styles.newOrderLocationGrid}>
             <Field label="城市">
               <CityInput value={city} cities={cities} onChange={setCity} onCreate={onCreateCity} />
             </Field>
@@ -1961,7 +2489,46 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
               <SearchableCreatable label="品牌方" value={brand} items={brands} onChange={setBrand} onCreate={onCreateBrand} placeholder="搜索或输入品牌，如格力 / gl" />
             </Field>
           </div>
-          <div style={styles.formRow2}>
+          {storeMessage && (
+            <div style={styles.storeMatchBox}>
+              <div style={styles.storeMatchTitle}>{storeMessage}</div>
+              {selectedStore ? (
+                <>
+                  <div>🏪 {selectedStore.city} · {selectedStore.brand} · {selectedStore.mall} · {selectedStore.store_name}</div>
+                  <input style={styles.input} value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="门店名称" />
+                  {selectedStore.special_requirements && <div style={styles.storeWarning}>⚠️ 门店特殊要求：{selectedStore.special_requirements}</div>}
+                  {selectedStore.notes && <div>备注：{selectedStore.notes}</div>}
+                  <button type="button" style={styles.smallPrimaryBtn} onClick={() => setStoreMessage("已选择历史门店")}>继续使用该门店</button>
+                </>
+              ) : (
+                <>
+                  <input style={styles.input} value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="门店名称" />
+                  <button type="button" style={styles.smallPrimaryBtn} onClick={() => setShowStoreForm((value) => !value)}>＋ 新建门店</button>
+                  {showStoreForm && (
+                    <div style={styles.storeFormBox}>
+                      <input style={styles.input} value={storeAddress} onChange={(e) => setStoreAddress(e.target.value)} placeholder="门店地址" />
+                      <input style={styles.input} value={storeContactName} onChange={(e) => setStoreContactName(e.target.value)} placeholder="联系人" />
+                      <input style={styles.input} value={storeContactPhone} onChange={(e) => setStoreContactPhone(e.target.value)} placeholder="联系电话" />
+                      <textarea style={styles.input} value={storeRequirements} onChange={(e) => setStoreRequirements(e.target.value)} placeholder="特殊要求" />
+                      <textarea style={styles.input} value={storeNotes} onChange={(e) => setStoreNotes(e.target.value)} placeholder="备注" />
+                      <button type="button" style={styles.smallPrimaryBtn} onClick={async () => {
+                        if (!city.trim() || !brand.trim() || !mall.trim() || !storeName.trim()) return;
+                        try {
+                          const store = await onCreateStore({ city: city.trim(), brand: brand.trim(), mall: mall.trim(), store_name: storeName.trim(), address: storeAddress.trim() || null, contact_name: storeContactName.trim() || null, contact_phone: storeContactPhone.trim() || null, special_requirements: storeRequirements.trim() || null, notes: storeNotes.trim() || null });
+                          setSelectedStore(store);
+                          setStoreMessage("已创建并选择门店");
+                          setShowStoreForm(false);
+                        } catch (e) {
+                          setErr("创建门店失败：" + (e.message || "未知错误"));
+                        }
+                      }}>保存并使用门店</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+          <div style={styles.newOrderPartyGrid}>
             <Field label="甲方公司">
               <NamePicker items={clients} valueId={clientId} onSelect={setClientId} onAdd={onAddClient} placeholder="选择甲方…" />
             </Field>
@@ -2017,34 +2584,6 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
           <Field label="备注（选填）">
             <textarea style={{ ...styles.input, minHeight: 50, resize: "vertical" }} value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>
-          <Field label="投保信息">
-            <div style={styles.chipRow}>
-              <button style={{ ...styles.resultChip, ...(!insuranceEnabled ? styles.chipOn : {}) }} onClick={() => setInsuranceEnabled(false)}>无</button>
-              <button style={{ ...styles.resultChip, ...(insuranceEnabled ? styles.chipOn : {}) }} onClick={() => setInsuranceEnabled(true)}>有</button>
-            </div>
-            {insuranceEnabled && (
-              <>
-                <div style={{ ...styles.chipRow, marginTop: 8 }}>
-                  {INSURANCE_TYPES.map((t) => (
-                    <button
-                      key={t.key}
-                      style={{ ...styles.resultChip, ...(insuranceType === t.key ? styles.chipOn : {}) }}
-                      onClick={() => setInsuranceType(t.key)}
-                    >
-                      {t.label}
-                    </button>
-                  ))}
-                </div>
-                <input
-                  style={{ ...styles.input, marginTop: 8 }}
-                  type="number"
-                  placeholder="投保金额"
-                  value={insuranceAmount}
-                  onChange={(e) => setInsuranceAmount(e.target.value)}
-                />
-              </>
-            )}
-          </Field>
           {err && <div style={styles.formErr}>{err}</div>}
           <div style={styles.formActions}>
             <button style={styles.ghostBtn} onClick={onClose}>取消</button>
@@ -2080,6 +2619,10 @@ const styles = {
   smallPrimaryBtn: { display: "flex", alignItems: "center", gap: 5, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 },
+  successBar: { background: "#E4F3E9", color: "#2C6B45", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, marginBottom: 12 },
+  previewBox: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 12, lineHeight: 1.7, color: "#4C6169" },
+  previewTitle: { fontWeight: 700, color: "#145560", marginBottom: 4 },
+  previewList: { whiteSpace: "pre-line" },
   filterBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 18, flexWrap: "wrap" },
   tabs: { display: "flex", gap: 6, flexWrap: "wrap" },
   tab: { display: "flex", alignItems: "center", gap: 5, background: "#F4F7F6", border: "1px solid transparent", borderRadius: 7, padding: "6px 10px", fontSize: 12.5, color: "#4C6169", fontWeight: 500 },
@@ -2121,6 +2664,9 @@ const styles = {
   moneyChip: { fontSize: 11.5, fontWeight: 700, background: "#F4F7F6", color: "#4C6169", padding: "5px 10px", borderRadius: 20 },
   settleBtn: { display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700, background: "#FBEEDD", color: "#A5661A", border: "none", padding: "5px 10px", borderRadius: 20 },
   settleBtnDone: { background: "#E4F3E9", color: "#2C6B45" },
+  settlementBadge: { display: "inline-flex", alignItems: "center", borderRadius: 12, padding: "3px 7px", fontSize: 10.5, fontWeight: 700 },
+  settlementBadgeDone: { background: "#E4F3E9", color: "#2C6B45" },
+  settlementBadgePending: { background: "#FBEEDD", color: "#A5661A" },
   metaHint: { fontSize: 11, color: "#8FA1A8", marginBottom: 8 },
   chipRow: { display: "flex", flexWrap: "wrap", gap: 6 },
   chipOn: { background: "#E3F0F1", borderColor: "#1F7A8C", color: "#145560" },
@@ -2163,14 +2709,44 @@ const styles = {
   serviceCostList: { marginTop: 8, background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 8, padding: "6px 9px" },
   serviceCostRow: { display: "flex", alignItems: "center", gap: 8, padding: "5px 0", borderBottom: "1px solid #F0F3F2", fontSize: 12, color: "#4C6169" },
   serviceCostTotal: { textAlign: "right", color: "#A5661A", fontWeight: 700, fontSize: 12, paddingTop: 6 },
+  expenseList: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 },
+  expenseRow: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 8, padding: "8px 9px", fontSize: 12 },
+  expenseMain: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6, lineHeight: 1.5 },
+  expenseType: { borderRadius: 12, padding: "2px 6px", fontSize: 10.5, fontWeight: 700 },
+  expenseActions: { display: "flex", flexShrink: 0, gap: 2 },
+  expenseSettled: { color: "#2C6B45", fontWeight: 700 },
+  expenseUnsettled: { color: "#A5661A", background: "#FBEEDD", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
+  expenseNote: { color: "#8FA1A8" },
+  expenseEditor: { display: "flex", flexDirection: "column", gap: 8, background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 8 },
+  expenseFormGrid: { display: "grid", gridTemplateColumns: "1fr 1.4fr .65fr .8fr auto", gap: 6, alignItems: "center" },
+  expenseAmountPreview: { fontSize: 12, fontWeight: 700, color: "#145560", whiteSpace: "nowrap" },
+  expensePaymentRow: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 12, color: "#4C6169" },
+  expenseEditorActions: { display: "flex", justifyContent: "flex-end", gap: 6 },
+  storeInfoBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: "9px 10px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
+  storeInfoTitle: { fontWeight: 700, color: "#145560", marginBottom: 3 },
+  storeMatchBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
+  storeMatchTitle: { fontWeight: 700, color: "#145560", marginBottom: 4 },
+  storeWarning: { whiteSpace: "pre-line", color: "#A5661A", background: "#FBEEDD", borderRadius: 6, padding: "5px 7px", margin: "5px 0" },
+  storeFormBox: { display: "grid", gap: 7, marginTop: 8, paddingTop: 8, borderTop: "1px solid #DDE6E4" },
   formRow2: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 },
   formRow3: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 },
+  newOrderLocationGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 },
+  newOrderPartyGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 10 },
   fieldLabel: { fontSize: 11.5, fontWeight: 600, color: "#4C6169", marginBottom: 5 },
-  input: { width: "100%", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: "#16262B", background: "#fff" },
+  input: { width: "100%", minWidth: 0, boxSizing: "border-box", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: "#16262B", background: "#fff" },
   resultChips: { display: "flex", flexWrap: "wrap", gap: 6 },
   resultChip: { display: "flex", alignItems: "center", gap: 5, border: "1px solid #E2E9E8", borderRadius: 20, padding: "6px 11px", fontSize: 12, fontWeight: 600, background: "#fff", color: "#4C6169" },
   formErr: { color: "#C1443D", fontSize: 12, marginBottom: 8 },
   formActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 },
+  dangerZone: { marginTop: 24, paddingTop: 16, borderTop: "1px solid #F0D2D0" },
+  dangerTitle: { color: "#A23931", fontSize: 12, fontWeight: 700, marginBottom: 8 },
+  deleteOrderBtn: { display: "flex", alignItems: "center", gap: 6, background: "#F6E7E6", color: "#A23931", border: "1px solid #C1443D55", borderRadius: 8, padding: "8px 12px", fontSize: 12, fontWeight: 700 },
+  confirmModal: { width: 430, maxWidth: "92vw", margin: "auto", background: "#fff", borderRadius: 14, padding: 20, boxShadow: "0 12px 30px rgba(18,32,36,0.18)" },
+  confirmTitle: { fontSize: 17, fontWeight: 700, color: "#A23931", marginBottom: 10 },
+  confirmWarning: { color: "#A23931", background: "#F6E7E6", borderRadius: 8, padding: 10, fontSize: 12.5, lineHeight: 1.6 },
+  confirmInfo: { background: "#F4F7F6", borderRadius: 8, padding: 10, marginTop: 12, fontSize: 12.5, lineHeight: 1.8, color: "#4C6169" },
+  confirmActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 },
+  confirmDeleteBtn: { background: "#C1443D", color: "#fff", border: "none", borderRadius: 8, padding: "9px 13px", fontSize: 12, fontWeight: 700 },
   modal: { background: "#fff", borderRadius: 14, width: 560, maxWidth: "92vw", maxHeight: "88vh", display: "flex", flexDirection: "column", margin: "auto" },
   modalHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px 18px", borderBottom: "1px solid #E2E9E8" },
   modalTitle: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 16 },
