@@ -12,7 +12,7 @@ function formatExpectedTime(iso) {
 
 export default function OrderTimeoutNotice({ order, now = Date.now() }) {
   const hasVisits = Array.isArray(order?.visits) && order.visits.length > 0;
-  const { assignmentOverdue, expectedVisitOverdue } = getOrderTimeoutReminders(order, now);
+  const { assignmentOverdue, expectedVisitOverdue, inspectionMaterialsMissing } = getOrderTimeoutReminders(order, now);
   const expectedTime = order?.expectedVisitTime ? new Date(order.expectedVisitTime).getTime() : null;
   const expectedValid = expectedTime !== null && !Number.isNaN(expectedTime);
   const expectedSoon = expectedValid && expectedTime >= now && expectedTime - now <= 60 * 60 * 1000;
@@ -35,6 +35,7 @@ export default function OrderTimeoutNotice({ order, now = Date.now() }) {
         </div>
       )}
       {assignmentOverdue && <div style={styles.timeoutAlert}>🔴 已超过2天未指派师傅</div>}
+      {inspectionMaterialsMissing && <div style={styles.timeoutAlert}>⚠️ 已完工未提交验收资料</div>}
     </>
   );
 }

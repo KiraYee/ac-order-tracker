@@ -15,7 +15,7 @@ import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
+  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
   ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
@@ -114,37 +114,50 @@ function filterOrdersByExportDate(orders, timeType, rangeType, customStart, cust
   });
 }
 
-function exportOrdersWorkbook(orders, technicians, clients, employees, filteredOnly) {
+function exportOrdersWorkbook(orders, technicians, clients, employees, stores, filteredOnly) {
   const techById = new Map(technicians.map((t) => [t.id, t]));
   const clientById = new Map(clients.map((c) => [c.id, c.name]));
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
+  const storeById = new Map(stores.map((store) => [store.id, store]));
   const exportOrders = orders;
   const summary = exportOrders.map((order) => {
     const tech = techById.get(order.assignedTechnicianId);
+    const store = order.store || storeById.get(order.storeId);
+    const storeName = store?.store_name || [order.city, order.mall].filter(Boolean).join("") || "";
     const quoteItems = orderQuoteItems(order);
-    const quoteTotal = itemsChargeTotal(quoteItems);
-    const costTotal = orderVisitCostTotal(order);
+    const clientQuoteTotal = orderChargeTotal(order);
+    const expenseRecords = new Map();
+    for (const record of order.expenseRecords || []) expenseRecords.set(record.id, record);
+    for (const visit of order.visits || []) {
+      for (const record of visit.expenseRecords || []) expenseRecords.set(record.id, record);
+    }
+    const technicianFeeRecords = Array.from(expenseRecords.values()).filter((record) => record.type === "technician_fee");
+    const technicianQuoteTotal = technicianFeeRecords.reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const insuranceFeeTotal = Array.from(expenseRecords.values())
+      .filter((record) => record.type === "insurance")
+      .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const technicianSettlement = technicianFeeRecords.length === 0
+      ? "—"
+      : technicianFeeRecords.every((record) => record.isSettled === true) ? "是" : "否";
     return {
       "工单编号": order.ticketNo || "",
       "报修时间": excelDate(order.reportTime),
       "城市": order.city || "",
       "甲方": clientById.get(order.clientId) || "",
-      "品牌方": order.brand || "",
+      "门店": storeName,
       "故障描述": order.issueDesc || "",
       "备注": order.notes || "",
       "跟单人": employeeById.get(order.followerId) || "",
       "指派师傅": tech?.name || "",
-      "师傅电话": tech?.phone || "",
-      "师傅工种": Array.isArray(tech?.skills) ? tech.skills.join("、") : "",
       "当前状态": order.status || "",
-      "预计上门时间": excelDate(order.expectedVisitTime),
-      "是否投保": order.insuranceEnabled ? "是" : order.insuranceEnabled === false ? "否" : "",
-      "投保类型": order.insuranceType || "",
-      "投保金额": order.insuranceAmount ?? "",
-      "报价总额": quoteTotal,
-       "师傅实际成本总额": costTotal,
-      "利润": quoteTotal - costTotal,
-      "师傅是否结算": order.technicianSettled ? "是" : order.technicianSettled === false ? "否" : "",
+      "验收资料是否齐全": order.inspectionPhotoUrl?.trim() || order.comparePhotoUrl?.trim() ? "是" : "否",
+      "师傅报价总额": technicianQuoteTotal,
+      "保险费用总额": insuranceFeeTotal,
+      "师傅是否结算": technicianSettlement,
+      "甲方报价总额": clientQuoteTotal,
+      "报价备注": order.quoteNote || "",
+      "甲方是否已结算": order.clientSettled ? "是" : "否",
+      "利润": clientQuoteTotal - technicianQuoteTotal - insuranceFeeTotal,
       "完成时间": excelDate(order.completedAt),
       "创建时间": excelDate(order.createdAt),
     };
@@ -166,7 +179,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, filteredO
   const workbook = XLSX.utils.book_new();
   const summarySheet = XLSX.utils.json_to_sheet(summary);
   const detailSheet = XLSX.utils.json_to_sheet(details);
-  formatExcelDates(summarySheet, ["报修时间", "预计上门时间", "完成时间", "创建时间"]);
+  formatExcelDates(summarySheet, ["报修时间", "完成时间", "创建时间"]);
   XLSX.utils.book_append_sheet(workbook, summarySheet, "工单总表");
   XLSX.utils.book_append_sheet(workbook, detailSheet, "报价明细");
   const date = new Date().toISOString().slice(0, 10);
@@ -965,10 +978,10 @@ function OrdersView({ userEmail }) {
             </button>
             {showExportMenu && (
               <div style={styles.exportMenu}>
-                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(filtered, technicians, clients, employees, true); setShowExportMenu(false); }}>
+                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(filtered, technicians, clients, employees, stores, true); setShowExportMenu(false); }}>
                   导出当前筛选结果
                 </button>
-                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(orders, technicians, clients, employees, false); setShowExportMenu(false); }}>
+                <button style={styles.exportMenuItem} onClick={() => { exportOrdersWorkbook(orders, technicians, clients, employees, stores, false); setShowExportMenu(false); }}>
                   导出全部工单
                 </button>
               </div>
