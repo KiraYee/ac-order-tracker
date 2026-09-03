@@ -7,7 +7,7 @@ import {
   Pencil, Link2, DollarSign, TrendingUp, CalendarCheck
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal } from "../../lib/dataHelpers";
+import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
 import { ticketNoFromReportTime } from "../../lib/dataHelpers";
 
 const STATUSES = ["待核实", "待派工", "待上门", "维修中", "已完成", "已取消"];
@@ -41,10 +41,10 @@ function fmtDate(iso) {
   ).padStart(2, "0")}`;
 }
 
-function daysSince(iso) {
-  if (!iso) return null;
-  const diff = Date.now() - new Date(iso).getTime();
-  return Math.max(0, Math.floor(diff / 86400000));
+function isOverdueBy(iso, now = Date.now()) {
+  if (!iso) return false;
+  const time = new Date(iso).getTime();
+  return !Number.isNaN(time) && now - time > 48 * 60 * 60 * 1000;
 }
 
 function orderCostTotal(o) {
@@ -57,6 +57,7 @@ function orderFromDb(row) {
     id: row.id,
     ticketNo: row.ticket_no,
     mall: row.mall,
+    city: row.city,
     brand: row.brand,
     contactName: row.contact_name,
     contactPhone: row.contact_phone,
@@ -68,6 +69,8 @@ function orderFromDb(row) {
     createdBy: row.created_by,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    pendingAssignmentAt: row.pending_assignment_at,
+    pendingVisitAt: row.pending_visit_at,
     relatedOrderId: row.related_order_id,
     assignedTechnicianId: row.assigned_technician_id,
     clientSettled: row.client_settled,
@@ -117,7 +120,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       const { data, error } = await supabase
         .from("orders")
         .select("*, expense_records(*), visits(*, expense_records(*))")
-        .order("created_at", { ascending: false });
+        .order("report_time", { ascending: false });
       if (error) throw error;
       setOrders((data || []).map(orderFromDb));
       setErrorMsg("");
@@ -244,13 +247,26 @@ export default function OrderTracker({ userEmail, onSignOut }) {
 
   async function updateStatus(orderId, status) {
     try {
+      const order = orders.find((item) => item.id === orderId);
+      const now = new Date().toISOString();
       const { error } = await supabase
         .from("orders")
-        .update({ status, updated_at: new Date().toISOString() })
+        .update({
+          status,
+          pending_assignment_at: status === "待派工" ? (order?.status === status ? order.pendingAssignmentAt : now) : null,
+          pending_visit_at: status === "待上门" ? (order?.status === status ? order.pendingVisitAt : now) : null,
+          updated_at: now,
+        })
         .eq("id", orderId);
       if (error) throw error;
       setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status, updatedAt: new Date().toISOString() } : o))
+        prev.map((o) => (o.id === orderId ? {
+          ...o,
+          status,
+          updatedAt: now,
+          pendingAssignmentAt: status === "待派工" ? (o.status === status ? o.pendingAssignmentAt : now) : null,
+          pendingVisitAt: status === "待上门" ? (o.status === status ? o.pendingVisitAt : now) : null,
+        } : o))
       );
       setErrorMsg("");
     } catch (e) {
@@ -262,11 +278,11 @@ export default function OrderTracker({ userEmail, onSignOut }) {
     try {
       const { error } = await supabase
         .from("orders")
-        .update({ assigned_technician_id: technicianId, updated_at: new Date().toISOString() })
+        .update({ assigned_technician_id: technicianId, ...(technicianId ? { pending_assignment_at: null } : {}), updated_at: new Date().toISOString() })
         .eq("id", orderId);
       if (error) throw error;
       setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, assignedTechnicianId: technicianId } : o))
+        prev.map((o) => (o.id === orderId ? { ...o, assignedTechnicianId: technicianId, ...(technicianId ? { pendingAssignmentAt: null } : {}) } : o))
       );
       setErrorMsg("");
     } catch (e) {
@@ -299,7 +315,12 @@ export default function OrderTracker({ userEmail, onSignOut }) {
 
       const { error: updErr } = await supabase
         .from("orders")
-        .update({ status: nextStatus, updated_at: new Date().toISOString() })
+        .update({
+          status: nextStatus,
+          pending_assignment_at: null,
+          pending_visit_at: null,
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", orderId);
       if (updErr) throw updErr;
 
@@ -519,14 +540,9 @@ export default function OrderTracker({ userEmail, onSignOut }) {
 function OrderCard({ order, technicians, onClick }) {
   const st = STATUS_STYLE[order.status];
   const lastVisit = order.visits[order.visits.length - 1];
-  const d = daysSince(order.reportTime);
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
-  const cost = orderCostTotal(order);
-  const technicianRecords = [
-    ...(order.expenseRecords || []),
-    ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
-  ].filter((record, index, records) => record.type === "technician_fee" && records.findIndex((item) => item.id === record.id) === index);
-  const technicianSettled = technicianRecords.length > 0 && technicianRecords.every((record) => record.is_settled);
+  const cost = orderTechnicianCostTotal(order);
+  const technicianSettled = !!order.technicianSettled;
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -537,26 +553,26 @@ function OrderCard({ order, technicians, onClick }) {
         </span>
       </div>
       <div style={styles.cardMall}>
-        {order.mall}
+        {order.city ? `${order.city} · ` : ""}{order.mall}
         {order.brand ? <span style={styles.cardBrand}> · {order.brand}</span> : null}
       </div>
       <div style={styles.cardIssue}>{order.issueDesc}</div>
       <div style={styles.cardMetaRow}>
         <span style={styles.cardMeta}>
           <Clock size={12} /> 报修 {fmtDate(order.reportTime)}
-          {d !== null && d > 0 ? ` · ${d}天前` : ""}
         </span>
       </div>
-      {(tech || cost > 0 || order.clientSettled !== undefined) && (
+      {(tech || cost > 0 || order.clientSettled !== undefined || !order.assignedTechnicianId) && (
         <div style={styles.cardMetaRow}>
           {tech && (
             <span style={styles.cardMeta}>
-              <Users size={12} /> 指派：{tech.name}
+              <Users size={12} /> 师傅：{tech.name}
             </span>
           )}
+          {!tech && <span style={styles.cardMeta}>师傅：未指派</span>}
           {cost > 0 && (
             <span style={{ ...styles.cardMeta, color: "#A5661A" }}>
-              <DollarSign size={12} /> ¥{cost}
+              {order.technicianSettled ? "已结算" : `- ¥${cost}`}
             </span>
           )}
           <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
@@ -582,6 +598,8 @@ function OrderCard({ order, technicians, onClick }) {
           })()}
         </div>
       )}
+      {order.status === "待派工" && !order.assignedTechnicianId && isOverdueBy(order.pendingAssignmentAt) && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
+      {order.status === "待上门" && isOverdueBy(order.pendingVisitAt) && <div style={styles.timeoutAlert}>🔴 已超过2天未上门</div>}
     </button>
   );
 }
@@ -1278,7 +1296,8 @@ const styles = {
   ticketNo: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11.5, color: "#8FA1A8", letterSpacing: "0.02em" },
   statusBadge: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20 },
   cardMall: { fontWeight: 700, fontSize: 14.5, color: "#16262B" },
-  cardBrand: { fontWeight: 400, color: "#8FA1A8", fontSize: 12.5 },
+  cardBrand: { fontWeight: 700, color: "#16262B", fontSize: 14.5 },
+  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },

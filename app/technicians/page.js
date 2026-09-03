@@ -7,7 +7,7 @@ import {
 import { supabase } from "../../lib/supabaseClient";
 import * as XLSX from "xlsx";
 import AppShell from "../components/AppShell";
-import { orderFromDb, computeTechnicianStats, groupByCity, fmtDate, visitTechnicianCostTotal, resultMeta, SKILL_PRESETS } from "../../lib/dataHelpers";
+import { orderFromDb, orderStoreDisplay, computeTechnicianStats, groupByCity, fmtDate, visitTechnicianCostTotal, resultMeta, SKILL_PRESETS } from "../../lib/dataHelpers";
 
 function exportTechniciansWorkbook(technicians) {
   const rows = technicians.map((technician) => ({
@@ -58,12 +58,14 @@ function TechniciansView() {
 
   async function load() {
     setLoading(true);
-    const [{ data: techs }, { data: ords }] = await Promise.all([
+    const [{ data: techs }, { data: ords }, { data: storeRows }] = await Promise.all([
       supabase.from("technicians").select("*").order("name"),
       supabase.from("orders").select("*, expense_records(*), visits(*, expense_records(*))"),
+      supabase.from("stores").select("*"),
     ]);
     setTechnicians(techs || []);
-    setOrders((ords || []).map(orderFromDb));
+    const storeById = new Map((storeRows || []).map((store) => [store.id, store]));
+    setOrders((ords || []).map(orderFromDb).map((order) => ({ ...order, store: storeById.get(order.storeId) || null })));
     setLoading(false);
   }
 
@@ -253,6 +255,12 @@ function TechnicianDetail({ technician, orders, onClose }) {
               {relatedVisits.map((v) => {
                 const m = resultMeta(v.resultType);
                 const cost = visitTechnicianCostTotal(v);
+                const storeDisplay = orderStoreDisplay(v.order);
+                const location = storeDisplay.storeName || [storeDisplay.city, storeDisplay.mall].filter(Boolean).join(" · ") || "未关联门店";
+                const expenseSummary = (v.expenseRecords || [])
+                  .filter((record) => record.label)
+                  .map((record) => `${record.label} ¥${record.amount ?? 0}`)
+                  .join(" · ");
                 return (
                   <Link key={v.id} href={`/orders?open=${v.order.id}`} style={styles.visitRow}>
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -261,7 +269,8 @@ function TechnicianDetail({ technician, orders, onClose }) {
                       </span>
                       <span style={styles.visitDate}>{fmtDate(v.visitTime)}</span>
                     </div>
-                    <div style={{ fontWeight: 600, fontSize: 12.5, marginTop: 2 }}>{v.order.mall}</div>
+                    <div style={{ fontWeight: 600, fontSize: 12.5, marginTop: 2 }}>{location}</div>
+                    {expenseSummary && <div style={{ color: "#667980", fontSize: 11.5, marginTop: 3 }}>{expenseSummary}</div>}
                     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 4 }}>
                       <span style={{ color: m.color, fontSize: 11.5 }}>{m.label}</span>
                       {cost > 0 && (

@@ -14,8 +14,8 @@ import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName, storeIdentity,
-  WORK_ORDER_VISIBLE_STATUSES, WORK_ORDER_STATUSES, ticketNoFromReportTime,
+  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName, getOrderTimeoutReminders,
+  ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
 function pinyinInitials(value) {
@@ -356,6 +356,7 @@ function OrdersView({ userEmail }) {
   const [draftEndDate, setDraftEndDate] = useState("");
   const [draftMonth, setDraftMonth] = useState("");
   const [visitFormMode, setVisitFormMode] = useState(null);
+  const [now, setNow] = useState(() => Date.now());
   const searchParams = useSearchParams();
 
   function clearTimeFilter() {
@@ -381,6 +382,11 @@ function OrdersView({ userEmail }) {
     fetchVocabulary("cities", setCities);
     fetchVocabulary("brands", setBrands);
     fetchStores();
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -576,6 +582,20 @@ function OrdersView({ userEmail }) {
     }
   }
 
+  async function deleteFeePreset(id) {
+    if (!window.confirm("确定删除这个报价快捷标签吗？已保存的历史报价不会受影响。")) return false;
+    try {
+      const { error } = await supabase.from("fee_presets").delete().eq("id", id);
+      if (error) throw error;
+      setFeePresets((prev) => prev.filter((preset) => preset.id !== id));
+      setErrorMsg("");
+      return true;
+    } catch (e) {
+      setErrorMsg("删除报价快捷标签失败：" + (e.message || "未知错误"));
+      return false;
+    }
+  }
+
   async function addOrder(data) {
     try {
       const [cityItem, brandItem] = await Promise.all([
@@ -609,6 +629,8 @@ function OrdersView({ userEmail }) {
           report_time: reportTime,
           expected_visit_time: data.expectedVisitTime || null,
           status: data.status || "待核实",
+          pending_assignment_at: data.status === "待派工" ? new Date().toISOString() : null,
+          pending_visit_at: data.status === "待上门" ? new Date().toISOString() : null,
           completed_at: data.status === "已完成" ? new Date().toISOString() : null,
           created_by: userEmail,
           related_order_id: data.relatedOrderId || null,
@@ -651,11 +673,18 @@ function OrdersView({ userEmail }) {
 
   async function updateStatus(orderId, status, expectedVisitTimeOverride) {
     const order = orders.find((o) => o.id === orderId);
-    if (status === "待上门" && !(expectedVisitTimeOverride || order?.expectedVisitTime)) {
-      setErrorMsg("进入“待上门”前，请填写预计上门时间");
-      return false;
-    }
+    const now = new Date().toISOString();
     const patch = { status };
+    if (status === "待派工" && order?.status !== "待派工") {
+      patch.pendingAssignmentAt = now;
+    } else if (status !== "待派工") {
+      patch.pendingAssignmentAt = null;
+    }
+    if (status === "待上门" && order?.status !== "待上门") {
+      patch.pendingVisitAt = now;
+    } else if (status !== "待上门") {
+      patch.pendingVisitAt = null;
+    }
     if (status === "已完成" && !order?.completedAt) {
       patch.completedAt = new Date().toISOString();
     }
@@ -664,20 +693,25 @@ function OrdersView({ userEmail }) {
   }
 
   async function assignTechnician(orderId, technicianId) {
-    await patchOrder(orderId, { assignedTechnicianId: technicianId });
+    await patchOrder(orderId, {
+      assignedTechnicianId: technicianId,
+      ...(technicianId ? { pendingAssignmentAt: null } : {}),
+    });
   }
 
   async function toggleClientSettled(order) {
     const next = !order.clientSettled;
+    if (!next && !window.confirm("甲方已结算，确认撤销结算并允许修改报价吗？")) return;
     await patchOrder(order.id, {
       clientSettled: next,
       clientSettledAt: next ? new Date().toISOString() : null,
     });
   }
 
-  async function saveQuotes(orderId, quoteItems) {
+  async function saveQuotes(orderId, quoteItems, quoteNote) {
     await patchOrder(orderId, {
       quoteItems,
+      quoteNote,
       quoteUpdatedAt: new Date().toISOString(),
       quoteUpdatedBy: userEmail,
     });
@@ -714,6 +748,10 @@ function OrdersView({ userEmail }) {
         status: nextStatus,
         updated_at: new Date().toISOString(),
       };
+      if (nextStatus === "待派工" && order?.status !== "待派工") completionPatch.pending_assignment_at = completionPatch.updated_at;
+      if (nextStatus !== "待派工") completionPatch.pending_assignment_at = null;
+      if (nextStatus === "待上门" && order?.status !== "待上门") completionPatch.pending_visit_at = completionPatch.updated_at;
+      if (nextStatus !== "待上门") completionPatch.pending_visit_at = null;
       if (nextStatus === "已完成" && !order?.completedAt) {
         completionPatch.completed_at = new Date().toISOString();
       }
@@ -868,30 +906,6 @@ function OrdersView({ userEmail }) {
 
   const selected = orders.find((o) => o.id === selectedId) || null;
 
-  const storePreview = useMemo(() => {
-    const groups = new Map();
-    const skipped = [];
-    for (const order of orders) {
-      if (order.storeId) continue;
-      const city = (order.city || "").trim();
-      const brand = (order.brand || "").trim();
-      const mall = (order.mall || "").trim();
-      const missing = [!city && "city", !brand && "brand", !mall && "mall"].filter(Boolean);
-      if (missing.length > 0) {
-        skipped.push({ order, missing });
-        continue;
-      }
-      const key = storeIdentity(city, brand, mall);
-      const current = groups.get(key) || { city, brand, mall, count: 0 };
-      current.count += 1;
-      groups.set(key, current);
-    }
-    return {
-      groups: Array.from(groups.values()).sort((a, b) => a.city.localeCompare(b.city, "zh-CN") || a.brand.localeCompare(b.brand, "zh-CN") || a.mall.localeCompare(b.mall, "zh-CN")),
-      skipped,
-    };
-  }, [orders]);
-
   async function deleteOrder(order) {
     try {
       const { error: visitsError } = await supabase.from("visits").delete().eq("order_id", order.id);
@@ -944,23 +958,6 @@ function OrdersView({ userEmail }) {
         </div>
       )}
       {successMsg && <div style={styles.successBar}>{successMsg}</div>}
-
-      <div style={styles.previewBox}>
-        <div style={styles.previewTitle}>旧工单自动生成门店预览（只读）</div>
-        {storePreview.groups.length === 0 ? (
-          <div style={styles.metaHint}>没有符合条件的未关联门店工单</div>
-        ) : (
-          <div style={styles.previewList}>
-            <div>将新建门店：</div>
-            {storePreview.groups.map((group, index) => (
-              <div key={`${group.city}-${group.brand}-${group.mall}`}>
-                {index + 1}. {generateStoreName(group.city, group.brand, group.mall)} — 影响 {group.count} 条工单
-              </div>
-            ))}
-          </div>
-        )}
-        <div style={styles.metaHint}>跳过（缺少 city / brand / mall）：{storePreview.skipped.length} 条工单</div>
-      </div>
 
       <div style={styles.filterBar}>
         <div style={styles.tabs}>
@@ -1082,7 +1079,7 @@ function OrdersView({ userEmail }) {
               <div style={styles.dateGroupHeader}>{group.title}</div>
               <div style={styles.grid}>
                 {group.orders.map((o) => (
-                  <OrderCard key={o.id} order={o} technicians={technicians} clients={clients} onClick={() => setSelectedId(o.id)} />
+                  <OrderCard key={o.id} order={o} technicians={technicians} clients={clients} now={now} onClick={() => setSelectedId(o.id)} />
                 ))}
               </div>
             </section>
@@ -1117,7 +1114,8 @@ function OrdersView({ userEmail }) {
           onFindStore={findStore}
           onCreateStore={createStore}
           onPatch={(camel) => patchOrder(selected.id, camel)}
-          onSaveQuotes={(items) => saveQuotes(selected.id, items)}
+          onSaveQuotes={(items, note) => saveQuotes(selected.id, items, note)}
+          onDeleteFeePreset={deleteFeePreset}
           onToggleClientSettled={() => toggleClientSettled(selected)}
           visitFormMode={visitFormMode}
           onOpenNewVisit={() => setVisitFormMode("new")}
@@ -1166,18 +1164,13 @@ function OrdersView({ userEmail }) {
   );
 }
 
-function OrderCard({ order, technicians, clients, onClick }) {
+function OrderCard({ order, technicians, clients, now, onClick }) {
   const st = STATUS_STYLE[order.status];
   const lastVisit = order.visits[order.visits.length - 1];
-  const d = daysSince(order.reportTime);
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const client = clients.find((c) => c.id === order.clientId);
-  const profit = orderProfit(order);
-  const technicianRecords = [
-    ...(order.expenseRecords || []),
-    ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
-  ].filter((record, index, records) => record.type === "technician_fee" && records.findIndex((item) => item.id === record.id) === index);
-  const technicianSettled = technicianRecords.length > 0 && technicianRecords.every((record) => record.isSettled);
+  const technicianCost = orderTechnicianCostTotal(order);
+  const { assignmentOverdue, expectedVisitOverdue, visitTimeUndetermined } = getOrderTimeoutReminders(order, now);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -1195,8 +1188,7 @@ function OrderCard({ order, technicians, clients, onClick }) {
       <div style={styles.cardIssue}>{order.issueDesc}</div>
       <div style={styles.cardMetaRow}>
         <span style={styles.cardMeta}>
-          <Clock size={12} /> 报修 {fmtDate(order.reportTime)}
-          {d !== null && d > 0 ? ` · ${d}天前` : ""}
+          <Clock size={12} /> 报修时间：{fmtDate(order.reportTime)}
         </span>
         {order.completedAt && (
           <span style={styles.completedTimeBadge}>
@@ -1204,27 +1196,18 @@ function OrderCard({ order, technicians, clients, onClick }) {
           </span>
         )}
       </div>
-      {(tech || client || profit !== 0 || order.clientSettled !== undefined) && (
+      {(tech || client || technicianCost > 0 || !order.assignedTechnicianId) && (
         <div style={styles.cardMetaRow}>
           {client && <span style={styles.cardMeta}>甲方：{client.name}</span>}
-          {tech && (
-            <span style={styles.cardMeta}>
-              <Users size={12} /> 指派：{tech.name}
-            </span>
-          )}
-          {profit !== 0 && (
-            <span style={{ ...styles.cardMeta, color: profit > 0 ? "#2C6B45" : "#A23931" }}>
-              <DollarSign size={12} /> 利润 ¥{profit}
-            </span>
-          )}
-          <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
-            甲方{order.clientSettled ? "已结算" : "未结算"}
-          </span>
-          <span style={{ ...styles.settlementBadge, ...(technicianSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
-            师傅费用{technicianSettled ? "已结清" : "未结清"}
+          <span style={{ ...styles.cardMeta, ...(technicianCost > 0 ? { color: order.technicianSettled ? "#2C6B45" : "#A5661A" } : {}) }}>
+            <Users size={12} /> {tech ? `指派：${tech.name}` : "师傅：未指派"}
+            {technicianCost > 0 ? ` - ${order.technicianSettled ? "已结算" : `¥${technicianCost}`}` : ""}
           </span>
         </div>
       )}
+      {assignmentOverdue && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
+      {expectedVisitOverdue && <div style={styles.timeoutAlert}>⚠️ 已超过预计上门时间未上门</div>}
+      {visitTimeUndetermined && <div style={styles.timeoutAlert}>⚠️ 待上门超2天未确定具体时间</div>}
       {lastVisit && (
         <div style={styles.lastVisitRow}>
           {(() => {
@@ -1403,7 +1386,7 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
 function DetailPanel({
   order, orders, technicians, feePresets, clients, cities, employees, stores,
   onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
-  onAddFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
+  onAddFeePreset, onDeleteFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
   visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm,
   onAddVisit, onUpdateVisit, onDeleteVisit,
   onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense,
@@ -1417,7 +1400,6 @@ function DetailPanel({
   const store = stores.find((item) => item.id === order.storeId) || order.store || null;
   const quoteItems = orderQuoteItems(order);
   const totalCharge = itemsChargeTotal(quoteItems);
-  const showWorkOrder = WORK_ORDER_VISIBLE_STATUSES.includes(order.status) || order.needWorkOrder;
   const insuranceRecords = (order.expenseRecords || []).filter((record) => record.type === "insurance");
 
   const [city, setCity] = useState(order.city || "");
@@ -1430,6 +1412,7 @@ function DetailPanel({
   const [notes, setNotes] = useState(order.notes || "");
   const [reportTime, setReportTime] = useState(() => toDateTimeLocal(order.reportTime));
   const [expectedVisitTime, setExpectedVisitTime] = useState(() => toDateTimeLocal(order.expectedVisitTime));
+  const [expectedVisitSaveState, setExpectedVisitSaveState] = useState("");
   const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
   const [inspectUrl, setInspectUrl] = useState(order.inspectionPhotoUrl || "");
@@ -1447,6 +1430,7 @@ function DetailPanel({
     setNotes(order.notes || "");
     setReportTime(toDateTimeLocal(order.reportTime));
     setExpectedVisitTime(toDateTimeLocal(order.expectedVisitTime));
+    setExpectedVisitSaveState("");
     setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
     setInspectUrl(order.inspectionPhotoUrl || "");
@@ -1455,16 +1439,24 @@ function DetailPanel({
   }, [order.id]);
 
   async function handleStatusChange(nextStatus) {
-    if (nextStatus === "待上门" && !order.expectedVisitTime && !expectedVisitTime) {
-      setStatusHint("进入“待上门”前，请填写预计上门时间");
-      return;
-    }
     const savedExpectedTime = expectedVisitTime ? new Date(expectedVisitTime).toISOString() : order.expectedVisitTime;
     if (nextStatus === "待上门" && savedExpectedTime && savedExpectedTime !== order.expectedVisitTime) {
       await onPatch({ expectedVisitTime: savedExpectedTime });
     }
     setStatusHint("");
     await onUpdateStatus(nextStatus, savedExpectedTime);
+  }
+
+  async function saveExpectedVisitTime() {
+    const value = expectedVisitTime ? new Date(expectedVisitTime).toISOString() : null;
+    setExpectedVisitSaveState("saving");
+    const saved = await onPatch({ expectedVisitTime: value });
+    if (saved) {
+      setExpectedVisitSaveState("saved");
+      window.setTimeout(() => setExpectedVisitSaveState(""), 2200);
+    } else {
+      setExpectedVisitSaveState("error");
+    }
   }
 
   return (
@@ -1670,8 +1662,11 @@ function DetailPanel({
                   type="datetime-local"
                   value={expectedVisitTime}
                   onChange={(e) => setExpectedVisitTime(e.target.value)}
-                  onBlur={() => onPatch({ expectedVisitTime: expectedVisitTime ? new Date(expectedVisitTime).toISOString() : null })}
+                  onBlur={saveExpectedVisitTime}
                 />
+                {expectedVisitSaveState === "saving" && <div style={styles.saveStateHint}>保存中…</div>}
+                {expectedVisitSaveState === "saved" && <div style={styles.saveStateSuccess}>已保存 ✓</div>}
+                {expectedVisitSaveState === "error" && <div style={styles.saveStateError}>保存失败，请重试</div>}
                 {!order.expectedVisitTime && <div style={styles.warningHint}>⚠ 未填写预计上门时间</div>}
               </Field>
             )}
@@ -1706,7 +1701,7 @@ function DetailPanel({
                     else onUpdateVisit(visitFormMode.id, v);
                   }}
                   visitId={visitFormMode === "new" ? null : visitFormMode.id}
-                  orderId={selected.id}
+                  orderId={order.id}
                   employees={employees}
                   onCreateExpense={createExpenseRecord}
                   onUpdateExpense={updateExpenseRecord}
@@ -1777,19 +1772,18 @@ function DetailPanel({
 
           <div style={styles.sectionBlock}>
             <div style={styles.sectionTitle}><DollarSign size={13} /> 向甲方报价管理</div>
-            {totalCharge > 0 && (
-              <div style={styles.moneyRow}>
-                <div style={styles.moneyChip}>向甲方报价 ¥{totalCharge}</div>
-                {order.status === "已完成" && (
-                  <button
-                    style={{ ...styles.settleBtn, ...(order.clientSettled ? styles.settleBtnDone : {}) }}
-                    onClick={onToggleClientSettled}
-                  >
-                    <CircleDollarSign size={12} /> {order.clientSettled ? "甲方已结算" : "甲方未结算"}
-                  </button>
-                )}
-              </div>
-            )}
+            <div style={styles.moneyRow}>
+              {totalCharge > 0 && <div style={styles.moneyChip}>向甲方报价 ¥{totalCharge}</div>}
+              <label style={styles.settlementCheckbox}>
+                <input type="checkbox" checked={!!order.clientSettled} onChange={onToggleClientSettled} />
+                已结算
+              </label>
+              {order.clientSettled && (
+                <button type="button" style={{ ...styles.settleBtn, ...styles.settleBtnDone }} onClick={onToggleClientSettled}>
+                  <CircleDollarSign size={12} /> 撤销结算
+                </button>
+              )}
+            </div>
             {order.quoteUpdatedAt && (
               <div style={styles.metaHint}>
                 最后修改：{fmtDate(order.quoteUpdatedAt)} · {order.quoteUpdatedBy || "—"}
@@ -1798,9 +1792,11 @@ function DetailPanel({
             <QuoteItemsEditor
               key={order.id + String(order.quoteUpdatedAt || "")}
               initialItems={quoteItems}
+              initialNote={order.quoteNote}
               feePresets={feePresets}
               orders={orders}
               onAddPreset={onAddFeePreset}
+              onDeletePreset={onDeleteFeePreset}
               onSave={onSaveQuotes}
               locked={!!order.clientSettled}
               onUnlock={() => {
@@ -1809,34 +1805,8 @@ function DetailPanel({
             />
           </div>
 
-          {showWorkOrder && (
-            <div style={styles.sectionBlock}>
-              <div style={styles.sectionTitle}>施工单</div>
-              <div style={styles.chipRow}>
-                {[false, true].map((v) => (
-                  <button
-                    key={String(v)}
-                    style={{ ...styles.resultChip, ...(!!order.needWorkOrder === v ? styles.chipOn : {}) }}
-                    onClick={() => onPatch({ needWorkOrder: v, workOrderStatus: v ? (order.workOrderStatus || "待办理") : null })}
-                  >
-                    {v ? "需要施工单" : "不需要"}
-                  </button>
-                ))}
-              </div>
-              {order.needWorkOrder && (
-                <div style={{ ...styles.chipRow, marginTop: 8 }}>
-                  {WORK_ORDER_STATUSES.map((s) => (
-                    <button
-                      key={s}
-                      style={{ ...styles.resultChip, ...(order.workOrderStatus === s ? styles.chipOn : {}) }}
-                      onClick={() => onPatch({ workOrderStatus: s })}
-                    >
-                      {s}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
+          {store?.requires_construction_permit && (
+            <div style={styles.storePermitHint}>⚠️ 本门店通常需要施工证</div>
           )}
 
           {order.status === "已完成" && (
@@ -1981,8 +1951,9 @@ function CityInput({ value, cities = [], onChange, onCreate = async () => null }
   return <SearchableCreatable label="城市" value={value} items={cities} onChange={onChange} onCreate={onCreate} placeholder="搜索或输入城市，如上海 / sh" />;
 }
 
-function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSave, locked = false, onUnlock }) {
+function QuoteItemsEditor({ initialItems, initialNote = "", feePresets, orders, onAddPreset, onDeletePreset, onSave, locked = false, onUnlock }) {
   const [items, setItems] = useState(() => (initialItems || []).map((it) => ({ ...it })));
+  const [note, setNote] = useState(initialNote || "");
   const [label, setLabel] = useState("");
   const [qty, setQty] = useState("1");
   const [chargeUnit, setChargeUnit] = useState("");
@@ -2011,13 +1982,14 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
           {feePresets.map((p) => {
             const cu = p.charge_unit ?? (p.kind === "charge" ? p.amount : 0) ?? 0;
             return (
-              <button
-                key={p.id}
-                style={styles.feePresetChipBtn}
-                onClick={() => addLine(p.label, 1, cu)}
-              >
-                {p.label} ¥{cu || 0}
-              </button>
+              <span key={p.id} style={styles.feePresetChip}>
+                <button type="button" style={styles.feePresetChipBtn} onClick={() => addLine(p.label, 1, cu)}>
+                  {p.label} ¥{cu || 0}
+                </button>
+                <button type="button" style={styles.feePresetDeleteBtn} onClick={() => onDeletePreset(p.id)} title="删除快捷标签">
+                  <X size={11} />
+                </button>
+              </span>
             );
           })}
         </div>
@@ -2090,8 +2062,19 @@ function QuoteItemsEditor({ initialItems, feePresets, orders, onAddPreset, onSav
           </div>
         </div>
       )}
+      <div style={styles.quoteNoteField}>
+        <label style={styles.quoteNoteLabel}>报价备注（选填）</label>
+        <textarea
+          style={styles.quoteNoteInput}
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="填写整单报价备注"
+          disabled={locked}
+          readOnly={locked}
+        />
+      </div>
       <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 8 }}>
-        {locked ? <button type="button" style={styles.ghostBtn} onClick={onUnlock}>撤销甲方结算后修改</button> : <button style={styles.primaryBtn} onClick={() => onSave(items)}>保存报价</button>}
+        {locked ? <button type="button" style={styles.ghostBtn} onClick={onUnlock}>撤销甲方结算后修改</button> : <button style={styles.primaryBtn} onClick={() => onSave(items, note.trim())}>保存报价</button>}
       </div>
     </div>
   );
@@ -2146,7 +2129,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
     if (draft.paymentMethod === "advance" && !draft.payerName.trim()) return;
     const next = {
       ...draft,
-      type: fixedType || draft.type,
+      type: fixedType || "technician_fee",
       orderId: orderId || draft.orderId || null,
       technicianId: draft.technicianId || null,
       label: draft.label.trim(),
@@ -2180,13 +2163,15 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   const amountLocked = !!editingRecord?.isSettled;
 
   return (
-    <Field label="本次支出">
+    <Field label={fixedType === "insurance" ? "保险费用" : "本次支出"}>
       {records.length > 0 && (
         <div style={styles.expenseList}>
           {records.map((record) => (
             <div key={record.id || `${record.label}-${record.amount}`} style={styles.expenseRow}>
               <div style={styles.expenseMain}>
-                <span style={{ ...styles.expenseType, ...EXPENSE_TYPE_STYLES[record.type] }}>{EXPENSE_TYPE_LABELS[record.type] || "其他"}</span>
+                {fixedType === "insurance" && (
+                  <span style={{ ...styles.expenseType, ...EXPENSE_TYPE_STYLES[record.type] }}>{EXPENSE_TYPE_LABELS[record.type] || "其他"}</span>
+                )}
                 <strong>{record.label}</strong>
                 <span>{record.qty} × ¥{record.unitPrice} = ¥{record.amount}</span>
                 <span>{record.paymentMethod === "advance" ? `员工垫付：${record.payerName || "未填写"}` : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
@@ -2207,13 +2192,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       {editingId && (
         <div style={styles.expenseEditor}>
           <div style={styles.expenseFormGrid}>
-            {fixedType ? <div style={{ ...styles.input, background: "#F4F7F6" }}>{EXPENSE_TYPE_LABELS[fixedType]}</div> : (
-              <select style={styles.input} value={draft.type} onChange={(e) => updateDraft("type", e.target.value)}>
-                <option value="technician_fee">师傅费用</option>
-                <option value="insurance">保险费</option>
-                <option value="other">其他</option>
-              </select>
-            )}
+            {fixedType && <div style={{ ...styles.input, background: "#F4F7F6" }}>{EXPENSE_TYPE_LABELS[fixedType]}</div>}
             <input style={styles.input} value={draft.label} onChange={(e) => updateDraft("label", e.target.value)} placeholder="费用名称" />
             <input style={styles.input} type="number" min="0" value={draft.qty} onChange={(e) => updateDraft("qty", e.target.value)} placeholder="数量" disabled={amountLocked} readOnly={amountLocked} />
             <input style={styles.input} type="number" min="0" value={draft.unitPrice} onChange={(e) => updateDraft("unitPrice", e.target.value)} placeholder="单价" disabled={amountLocked} readOnly={amountLocked} />
@@ -2444,10 +2423,6 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       setErr("请至少填写商场名称和故障描述");
       return;
     }
-    if ((status === "待派工" || status === "待上门") && !expectedVisitTime) {
-      setErr(`状态为“${status}”时，请填写预计上门时间`);
-      return;
-    }
     setSubmitting(true);
     await onSubmit({
       city: city.trim(),
@@ -2620,9 +2595,6 @@ const styles = {
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 },
   successBar: { background: "#E4F3E9", color: "#2C6B45", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, marginBottom: 12 },
-  previewBox: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 12, lineHeight: 1.7, color: "#4C6169" },
-  previewTitle: { fontWeight: 700, color: "#145560", marginBottom: 4 },
-  previewList: { whiteSpace: "pre-line" },
   filterBar: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, marginBottom: 18, flexWrap: "wrap" },
   tabs: { display: "flex", gap: 6, flexWrap: "wrap" },
   tab: { display: "flex", alignItems: "center", gap: 5, background: "#F4F7F6", border: "1px solid transparent", borderRadius: 7, padding: "6px 10px", fontSize: 12.5, color: "#4C6169", fontWeight: 500 },
@@ -2644,11 +2616,15 @@ const styles = {
   statusBadge: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20 },
   cardMall: { fontWeight: 700, fontSize: 14.5, color: "#16262B" },
   cardCity: { fontWeight: 600, color: "#1F7A8C" },
-  cardBrand: { fontWeight: 400, color: "#8FA1A8", fontSize: 12.5 },
+  cardBrand: { fontWeight: 700, color: "#16262B", fontSize: 14.5 },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2, flexWrap: "wrap" },
   completedTimeBadge: { display: "inline-flex", alignItems: "center", gap: 4, background: "#E4F3E9", border: "1px solid #3E8F6380", color: "#2C6B45", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },
+  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
+  saveStateHint: { color: "#8FA1A8", fontSize: 11.5, marginTop: 5 },
+  saveStateSuccess: { color: "#2C6B45", fontSize: 11.5, marginTop: 5 },
+  saveStateError: { color: "#A23931", fontSize: 11.5, marginTop: 5 },
   lastVisitRow: { display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, borderTop: "1px dashed #E2E9E8", paddingTop: 7, marginTop: 2 },
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 50, animation: "fadeIn .15s ease" },
   panel: { width: 540, maxWidth: "100%", background: "#F9FAFA", height: "100%", display: "flex", flexDirection: "column", animation: "slideIn .2s ease", boxShadow: "-8px 0 24px rgba(0,0,0,0.08)" },
@@ -2664,6 +2640,7 @@ const styles = {
   moneyChip: { fontSize: 11.5, fontWeight: 700, background: "#F4F7F6", color: "#4C6169", padding: "5px 10px", borderRadius: 20 },
   settleBtn: { display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, fontWeight: 700, background: "#FBEEDD", color: "#A5661A", border: "none", padding: "5px 10px", borderRadius: 20 },
   settleBtnDone: { background: "#E4F3E9", color: "#2C6B45" },
+  settlementCheckbox: { display: "inline-flex", alignItems: "center", gap: 5, color: "#4C6169", fontSize: 12, fontWeight: 600 },
   settlementBadge: { display: "inline-flex", alignItems: "center", borderRadius: 12, padding: "3px 7px", fontSize: 10.5, fontWeight: 700 },
   settlementBadgeDone: { background: "#E4F3E9", color: "#2C6B45" },
   settlementBadgePending: { background: "#FBEEDD", color: "#A5661A" },
@@ -2724,6 +2701,7 @@ const styles = {
   expenseEditorActions: { display: "flex", justifyContent: "flex-end", gap: 6 },
   storeInfoBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: "9px 10px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
   storeInfoTitle: { fontWeight: 700, color: "#145560", marginBottom: 3 },
+  storePermitHint: { background: "#FBEEDD", border: "1px solid #E08E3380", borderRadius: 8, padding: "7px 9px", marginBottom: 12, color: "#A5661A", fontSize: 12, fontWeight: 700 },
   storeMatchBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
   storeMatchTitle: { fontWeight: 700, color: "#145560", marginBottom: 4 },
   storeWarning: { whiteSpace: "pre-line", color: "#A5661A", background: "#FBEEDD", borderRadius: 6, padding: "5px 7px", margin: "5px 0" },
@@ -2757,7 +2735,12 @@ const styles = {
   relatedResultsBox: { marginTop: 6, border: "1px solid #E2E9E8", borderRadius: 8, background: "#fff", overflow: "hidden" },
   relatedResultItem: { display: "block", width: "100%", textAlign: "left", padding: "8px 10px", fontSize: 12, border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", color: "#16262B" },
   feePresetRow: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 },
+  feePresetChip: { display: "inline-flex", alignItems: "center", background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 20, overflow: "hidden" },
   feePresetChipBtn: { background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 20, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, color: "#16262B" },
+  feePresetDeleteBtn: { display: "flex", alignItems: "center", justifyContent: "center", background: "transparent", border: "none", borderLeft: "1px solid #E2E9E8", color: "#A23931", padding: "5px 6px" },
+  quoteNoteField: { marginTop: 10 },
+  quoteNoteLabel: { display: "block", color: "#4C6169", fontSize: 11.5, fontWeight: 600, marginBottom: 5 },
+  quoteNoteInput: { width: "100%", minHeight: 58, resize: "vertical", border: "1px solid #E2E9E8", borderRadius: 7, padding: "7px 9px", fontSize: 12, outline: "none", color: "#16262B", background: "#fff", boxSizing: "border-box" },
   tinyIconBtn: { background: "none", border: "none", color: "#8FA1A8", display: "flex", padding: 3 },
   quoteAddGrid: { display: "grid", gridTemplateColumns: "1.4fr 0.6fr 0.8fr 0.8fr auto", gap: 6, marginBottom: 6, alignItems: "center" },
   priceRefBox: { background: "#FBF8EE", border: "1px solid #EBDFB0", borderRadius: 8, padding: "6px 10px", marginBottom: 8 },

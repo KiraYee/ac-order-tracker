@@ -218,6 +218,7 @@ function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit }) {
             <Info label="地址" value={store.address} />
             <Info label="联系人" value={store.contact_name} />
             <Info label="联系电话" value={store.contact_phone} />
+            <Info label="施工证" value={store.requires_construction_permit ? "需要" : "不需要"} />
           </div>
 
           <SectionTitle text="服务要求" />
@@ -252,6 +253,7 @@ function StoreForm({ initial, onClose, onSubmit }) {
     contact_phone: initial.contact_phone || "",
     special_requirements: initial.special_requirements || "",
     notes: initial.notes || "",
+    requires_construction_permit: !!initial.requires_construction_permit,
   });
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
   return (
@@ -268,9 +270,14 @@ function StoreForm({ initial, onClose, onSubmit }) {
           <Field label="联系电话"><input style={styles.input} value={form.contact_phone} onChange={(e) => update("contact_phone", e.target.value)} /></Field>
           <Field label="特殊要求"><textarea style={styles.textarea} value={form.special_requirements} onChange={(e) => update("special_requirements", e.target.value)} /></Field>
           <Field label="备注"><textarea style={styles.textarea} value={form.notes} onChange={(e) => update("notes", e.target.value)} /></Field>
+          <Field label="是否需要施工证">
+            <div style={styles.toggleRow}>
+              {[false, true].map((value) => <button key={String(value)} type="button" style={{ ...styles.toggleBtn, ...(form.requires_construction_permit === value ? styles.toggleBtnActive : {}) }} onClick={() => update("requires_construction_permit", value)}>{value ? "需要" : "不需要"}</button>)}
+            </div>
+          </Field>
           <div style={styles.formActions}>
             <button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button>
-            <button type="button" style={styles.primaryBtn} onClick={() => onSubmit({ ...form, store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null })}>保存</button>
+            <button type="button" style={styles.primaryBtn} onClick={() => onSubmit({ ...form, store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button>
           </div>
         </div>
       </div>
@@ -279,7 +286,7 @@ function StoreForm({ initial, onClose, onSubmit }) {
 }
 
 function NewStoreForm({ onClose, onSubmit }) {
-  const [form, setForm] = useState({ city: "", brand: "", mall: "", store_name: "", address: "", contact_name: "", contact_phone: "", special_requirements: "", notes: "" });
+  const [form, setForm] = useState({ city: "", brand: "", mall: "", store_name: "", address: "", contact_name: "", contact_phone: "", special_requirements: "", notes: "", requires_construction_permit: false });
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
   useEffect(() => {
     if (!form.store_name || form.store_name === generateStoreName(form.city, form.brand, form.mall)) {
@@ -300,7 +307,12 @@ function NewStoreForm({ onClose, onSubmit }) {
           <Field label="联系电话"><input style={styles.input} value={form.contact_phone} onChange={(e) => update("contact_phone", e.target.value)} /></Field>
           <Field label="特殊要求"><textarea style={styles.textarea} value={form.special_requirements} onChange={(e) => update("special_requirements", e.target.value)} /></Field>
           <Field label="备注"><textarea style={styles.textarea} value={form.notes} onChange={(e) => update("notes", e.target.value)} /></Field>
-          <div style={styles.formActions}><button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!form.city.trim() || !form.brand.trim() || !form.mall.trim() || !form.store_name.trim()} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null })}>保存</button></div>
+          <Field label="是否需要施工证">
+            <div style={styles.toggleRow}>
+              {[false, true].map((value) => <button key={String(value)} type="button" style={{ ...styles.toggleBtn, ...(form.requires_construction_permit === value ? styles.toggleBtnActive : {}) }} onClick={() => update("requires_construction_permit", value)}>{value ? "需要" : "不需要"}</button>)}
+            </div>
+          </Field>
+          <div style={styles.formActions}><button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!form.city.trim() || !form.brand.trim() || !form.mall.trim() || !form.store_name.trim()} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button></div>
         </div>
       </div>
     </div>
@@ -365,4 +377,7 @@ const styles = {
   formActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
+  toggleRow: { display: "flex", gap: 6 },
+  toggleBtn: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 16, padding: "6px 14px", color: "#4C6169", fontSize: 12.5, fontWeight: 600 },
+  toggleBtnActive: { background: "#E3F0F1", borderColor: "#1F7A8C", color: "#145560" },
 };

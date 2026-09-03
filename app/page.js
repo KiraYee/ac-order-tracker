@@ -2,13 +2,13 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
-  TrendingUp, CalendarCheck, DollarSign, Loader2, ClipboardList, Clock, Wrench, AlertTriangle,
+  TrendingUp, CalendarCheck, DollarSign, Loader2, ClipboardList, Clock, AlertTriangle, Users,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import AppShell from "./components/AppShell";
 import {
-  STATUS_STYLE, OPEN_STATUSES, orderFromDb, fmtDate, daysSince,
-  orderChargeTotal, orderProfit, isInRange, RANGE_LABELS,
+  STATUS_STYLE, OPEN_STATUSES, orderFromDb, fmtDate,
+  orderChargeTotal, orderProfit, orderTechnicianCostTotal, isInRange, getOrderTimeoutReminders, sortOrdersForDashboard, RANGE_LABELS,
 } from "../lib/dataHelpers";
 
 export default function DashboardPage() {
@@ -21,6 +21,8 @@ export default function DashboardPage() {
 
 function DashboardContent() {
   const [orders, setOrders] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
+  const [clients, setClients] = useState([]);
   const [loading, setLoading] = useState(true);
   const [range, setRange] = useState("month");
   const [now, setNow] = useState(() => Date.now());
@@ -33,17 +35,20 @@ function DashboardContent() {
   useEffect(() => {
     (async () => {
       setLoading(true);
-      const { data } = await supabase
-        .from("orders")
-        .select("*, expense_records(*), visits(*, expense_records(*))")
-        .order("report_time", { ascending: false });
+      const [{ data }, { data: technicianRows }, { data: clientRows }] = await Promise.all([
+        supabase.from("orders").select("*, expense_records(*), visits(*, expense_records(*))"),
+        supabase.from("technicians").select("*"),
+        supabase.from("clients").select("*"),
+      ]);
       setOrders((data || []).map(orderFromDb));
+      setTechnicians(technicianRows || []);
+      setClients(clientRows || []);
       setLoading(false);
     })();
   }, []);
 
   const openOrders = useMemo(
-    () => orders.filter((o) => OPEN_STATUSES.includes(o.status)),
+    () => sortOrdersForDashboard(orders.filter((o) => OPEN_STATUSES.includes(o.status))),
     [orders]
   );
 
@@ -143,7 +148,11 @@ function DashboardContent() {
         <div style={styles.grid}>
           {openOrders.map((o) => {
             const st = STATUS_STYLE[o.status];
-            const d = daysSince(o.reportTime);
+            const client = clients.find((item) => item.id === o.clientId);
+            const technician = technicians.find((item) => item.id === o.assignedTechnicianId);
+            const technicianCost = orderTechnicianCostTotal(o);
+            const technicianFeeSettled = !!o.technicianSettled;
+            const { assignmentOverdue, visitTimeUndetermined } = getOrderTimeoutReminders(o, now);
             const expectedTime = o.expectedVisitTime ? new Date(o.expectedVisitTime).getTime() : null;
             const expectedDiff = expectedTime === null || Number.isNaN(expectedTime) ? null : expectedTime - now;
             const expectedOverdue = expectedDiff !== null && expectedDiff < 0;
@@ -158,19 +167,18 @@ function DashboardContent() {
                   </span>
                 </div>
                 <div style={styles.cardMall}>
-                  {o.city ? `${o.city} · ` : ""}
-                  {o.mall}
+                  {o.city ? `${o.city} · ` : ""}{o.mall}
                   {o.brand ? <span style={styles.cardBrand}> · {o.brand}</span> : null}
                 </div>
                 <div style={styles.cardIssue}>{o.issueDesc}</div>
-                {o.status === "待上门" && (
+                {o.status === "待上门" && (!expectedOverdue || !hasVisits) && (
                   <div style={{ ...styles.expectedVisit, ...(expectedSoon ? styles.expectedVisitSoon : {}), ...(expectedOverdue ? styles.expectedVisitOverdue : {}) }}>
                     {expectedOverdue ? <AlertTriangle size={14} /> : <Clock size={14} />}
                     <span>
                       {expectedTime === null || Number.isNaN(expectedTime)
                         ? "⚠ 未填写预计上门时间"
                         : expectedOverdue
-                          ? `已超过预计时间 · ${formatExpectedTime(o.expectedVisitTime)}`
+                          ? "⚠️ 已超过预计上门时间未上门"
                           : expectedSoon
                             ? `即将上门 · ${formatExpectedTime(o.expectedVisitTime)}`
                             : `预计上门：${formatExpectedTime(o.expectedVisitTime)}`}
@@ -178,15 +186,19 @@ function DashboardContent() {
                   </div>
                 )}
                 <div style={styles.cardMeta}>
-                  <Clock size={12} /> 报修 {fmtDate(o.reportTime)}
-                  {d !== null && d > 0 ? ` · ${d}天前` : ""}
-                  {o.visits.length > 0 && (
-                    <>
-                      {" "}
-                      <Wrench size={12} style={{ marginLeft: 6 }} /> 已上门 {o.visits.length} 次
-                    </>
-                  )}
+                  <Clock size={12} /> 报修时间：{fmtDate(o.reportTime)}
                 </div>
+                {(client || technician || technicianCost > 0 || assignmentOverdue || visitTimeUndetermined) && (
+                  <div style={styles.cardMetaRow}>
+                    {client && <span style={styles.cardMeta}>甲方：{client.name}</span>}
+                    <span style={{ ...styles.cardMeta, ...(technicianCost > 0 ? { color: technicianFeeSettled ? "#2C6B45" : "#A5661A" } : {}) }}>
+                      <Users size={12} /> {technician ? `指派：${technician.name}` : "师傅：未指派"}
+                      {technicianCost > 0 ? ` - ${technicianFeeSettled ? "已结算" : `¥${technicianCost}`}` : ""}
+                    </span>
+                  </div>
+                )}
+                {assignmentOverdue && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
+                {visitTimeUndetermined && <div style={styles.timeoutAlert}>⚠️ 待上门超2天未确定具体时间</div>}
               </Link>
             );
           })}
@@ -228,11 +240,13 @@ const styles = {
   statusBadge: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20 },
   dot: { width: 6, height: 6, borderRadius: "50%", display: "inline-block" },
   cardMall: { fontWeight: 700, fontSize: 14.5 },
-  cardBrand: { fontWeight: 400, color: "#8FA1A8", fontSize: 12.5 },
+  cardBrand: { fontWeight: 700, color: "#16262B", fontSize: 14.5 },
+  cardMetaRow: { display: "flex", gap: 12, marginTop: 2, flexWrap: "wrap" },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   expectedVisit: { display: "flex", alignItems: "center", gap: 6, background: "#E3F0F1", border: "1px solid #1F7A8C55", color: "#145560", borderRadius: 8, padding: "7px 9px", fontSize: 12.5, fontWeight: 700, marginTop: 2 },
   expectedVisitSoon: { background: "#FBEEDD", borderColor: "#E08E3380", color: "#A5661A" },
   expectedVisitOverdue: { background: "#F6E7E6", borderColor: "#C1443D80", color: "#A23931" },
   cardMeta: { fontSize: 11, color: "#8FA1A8", display: "flex", alignItems: "center", gap: 4 },
+  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   centerState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 0" },
 };

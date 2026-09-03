@@ -1,12 +1,13 @@
 "use client";
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import * as XLSX from "xlsx";
 import {
   Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle, Pencil,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
+import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
 
 export default function FinancePage() {
   return (
@@ -19,12 +20,15 @@ export default function FinancePage() {
 function FinanceView({ userEmail }) {
   const [orders, setOrders] = useState([]);
   const [technicians, setTechnicians] = useState([]);
+  const [employees, setEmployees] = useState([]);
+  const [stores, setStores] = useState([]);
   const [advances, setAdvances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [tab, setTab] = useState("receivable"); // receivable | payable | advances
   const [showNewAdvance, setShowNewAdvance] = useState(false);
   const [editingAdvance, setEditingAdvance] = useState(null);
+  const [financeFilters, setFinanceFilters] = useState({ range: "all", start: "", end: "", storeId: "", followerId: "", technicianId: "", employeeName: "" });
 
   useEffect(() => {
     load();
@@ -32,13 +36,18 @@ function FinanceView({ userEmail }) {
 
   async function load() {
     setLoading(true);
-    const [{ data: ords }, { data: techs }, { data: advs }] = await Promise.all([
+    const [{ data: ords }, { data: techs }, { data: advs }, { data: storeRows }, { data: employeeRows }] = await Promise.all([
       supabase.from("orders").select("*, expense_records(*), visits(*, expense_records(*))"),
       supabase.from("technicians").select("*"),
       supabase.from("advances").select("*").order("created_at", { ascending: false }),
+      supabase.from("stores").select("*"),
+      supabase.from("employees").select("*").order("name"),
     ]);
-    setOrders((ords || []).map(orderFromDb));
+    const storeById = new Map((storeRows || []).map((store) => [store.id, store]));
+    setOrders((ords || []).map(orderFromDb).map((order) => ({ ...order, store: storeById.get(order.storeId) || null })));
     setTechnicians(techs || []);
+    setEmployees(employeeRows || []);
+    setStores(storeRows || []);
     setAdvances(advs || []);
     setLoading(false);
   }
@@ -74,6 +83,32 @@ function FinanceView({ userEmail }) {
     } catch (e) {
       setErrorMsg("更新失败：" + (e.message || "未知错误"));
     }
+  }
+
+  async function batchSettle(items, kind) {
+    const now = new Date().toISOString();
+    const results = await Promise.all(items.map(async (item) => {
+      try {
+        const update = kind === "client"
+          ? { client_settled: true, client_settled_at: now }
+          : kind === "technician"
+            ? { technician_settled: true, technician_settled_at: now }
+            : { reimbursed: true, reimbursed_at: now };
+        const table = kind === "advance" ? "advances" : "orders";
+        const { error } = await supabase.from(table).update(update).eq("id", item.id);
+        return { error };
+      } catch (error) {
+        return { error };
+      }
+    }));
+    const failed = results.filter((result) => result.error).length;
+    await load();
+    if (failed) {
+      setErrorMsg(`${items.length}条中有${failed}条更新失败`);
+    } else {
+      setErrorMsg("");
+    }
+    return { failed };
   }
 
   async function addAdvance(data) {
@@ -219,23 +254,9 @@ function FinanceView({ userEmail }) {
         </button>
       </div>
 
-      {tab === "receivable" && (
-        <FinanceSectionGroup
-          pending={pendingReceivables}
-          completed={completedReceivables}
-          emptyText="没有客户费用记录"
-          render={(o) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} onSettle={() => toggleClientSettled(o)} />}
-        />
-      )}
+      {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
 
-      {tab === "payable" && (
-        <FinanceSectionGroup
-          pending={pendingPayables}
-          completed={completedPayables}
-          emptyText="没有师傅费用记录"
-          render={(p) => <FinanceOrderRow key={p.order.id} order={p.order} kind="technician" amount={p.cost} settled={p.order.technicianSettled} settledAt={p.order.technicianSettledAt} suffix={p.techName} onSettle={() => toggleTechnicianSettled(p.order)} />}
-        />
-      )}
+      {tab === "payable" && <FinanceFilteredGroups kind="technician" pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.order.id} order={p.order} kind="technician" amount={p.cost} settled={p.order.technicianSettled} settledAt={p.order.technicianSettledAt} suffix={p.techName} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p.order)} />} />}
 
       {tab === "advances" && (
         <div>
@@ -244,12 +265,7 @@ function FinanceView({ userEmail }) {
               <Plus size={15} /> 登记垫付
             </button>
           </div>
-          <FinanceSectionGroup
-            pending={pendingAdvances}
-            completed={completedAdvances}
-            emptyText="还没有垫付记录"
-            render={(a) => <FinanceAdvanceRow key={a.id} advance={a} orders={orders} onEdit={() => setEditingAdvance(a)} onToggle={() => toggleReimbursed(a)} />}
-          />
+          <FinanceFilteredGroups kind="advance" pending={pendingAdvances} completed={completedAdvances} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(a, options) => <FinanceAdvanceRow key={a.id} advance={a} orders={orders} showTypeTag={false} showSettlementDate={options.showSettlementDate} onEdit={() => setEditingAdvance(a)} onToggle={() => toggleReimbursed(a)} />} />
         </div>
       )}
 
@@ -266,11 +282,11 @@ function FinanceView({ userEmail }) {
             ...completedAdvances.map((a) => ({ kind: "advance", createdAt: a.created_at, item: a })),
           ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))}
           emptyText="还没有财务记录"
-          render={(entry) => entry.kind === "client"
-            ? <FinanceOrderRow key={`client-${entry.item.id}`} order={entry.item} kind="client" amount={orderChargeTotal(entry.item)} settled={entry.item.clientSettled} settledAt={entry.item.clientSettledAt} onSettle={() => toggleClientSettled(entry.item)} />
+            render={(entry, options) => entry.kind === "client"
+            ? <FinanceOrderRow key={`client-${entry.item.id}`} order={entry.item} kind="client" amount={orderChargeTotal(entry.item)} settled={entry.item.clientSettled} settledAt={entry.item.clientSettledAt} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(entry.item)} />
             : entry.kind === "technician"
-              ? <FinanceOrderRow key={`technician-${entry.item.order.id}`} order={entry.item.order} kind="technician" amount={entry.item.cost} settled={entry.item.order.technicianSettled} settledAt={entry.item.order.technicianSettledAt} suffix={entry.item.techName} onSettle={() => toggleTechnicianSettled(entry.item.order)} />
-              : <FinanceAdvanceRow key={`advance-${entry.item.id}`} advance={entry.item} orders={orders} onEdit={() => setEditingAdvance(entry.item)} onToggle={() => toggleReimbursed(entry.item)} />}
+              ? <FinanceOrderRow key={`technician-${entry.item.order.id}`} order={entry.item.order} kind="technician" amount={entry.item.cost} settled={entry.item.order.technicianSettled} settledAt={entry.item.order.technicianSettledAt} suffix={entry.item.techName} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(entry.item.order)} />
+              : <FinanceAdvanceRow key={`advance-${entry.item.id}`} advance={entry.item} orders={orders} showTypeTag showSettlementDate={options.showSettlementDate} onEdit={() => setEditingAdvance(entry.item)} onToggle={() => toggleReimbursed(entry.item)} />}
         />
       )}
 
@@ -293,28 +309,129 @@ function FinanceView({ userEmail }) {
   );
 }
 
-function FinanceSectionGroup({ pending, completed, render, emptyText }) {
+function FinanceFilteredGroups({ kind, pending, completed, orders, stores, technicians, employees, filters, setFilters, onBatchSettle, render }) {
+  const [completedOpen, setCompletedOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  const orderForItem = (item) => kind === "advance" ? orders.find((order) => order.id === item.order_id) : kind === "technician" ? item.order : item;
+  const amountForItem = (item) => kind === "advance" ? Number(item.amount) || 0 : kind === "technician" ? Number(item.cost) || 0 : orderChargeTotal(item);
+  const dateForItem = (item) => kind === "advance" ? item.created_at : kind === "technician" ? item.order.createdAt : item.createdAt;
+  const matchesFilters = (item) => {
+    const order = orderForItem(item);
+    const date = new Date(dateForItem(item)).getTime();
+    const start = filters.range === "month" ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
+      : filters.range === "last_month" ? new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).getTime()
+        : filters.start ? new Date(`${filters.start}T00:00:00`).getTime() : null;
+    const end = filters.range === "month" ? Date.now()
+      : filters.range === "last_month" ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
+        : filters.end ? new Date(`${filters.end}T23:59:59`).getTime() : null;
+    if (start && date < start) return false;
+    if (end && date > end) return false;
+    if (filters.storeId && order?.storeId !== filters.storeId) return false;
+    if (filters.followerId && order?.followerId !== filters.followerId) return false;
+    if (kind === "technician" && filters.technicianId && order?.assignedTechnicianId !== filters.technicianId) return false;
+    if (kind === "advance" && filters.employeeName && item.employee_name !== filters.employeeName) return false;
+    return true;
+  };
+  const filteredPending = pending.filter(matchesFilters);
+  const selected = filteredPending.filter((item) => selectedIds.includes(item.id));
+  const selectedTotal = selected.reduce((sum, item) => sum + amountForItem(item), 0);
+  const allSelected = filteredPending.length > 0 && filteredPending.every((item) => selectedIds.includes(item.id));
+  const resetSelection = () => setSelectedIds([]);
+
+  function updateFilter(key, value) {
+    setFilters((current) => ({ ...current, [key]: value }));
+    resetSelection();
+  }
+
+  async function handleBatch() {
+    const action = kind === "client" ? "标记已结算" : kind === "technician" ? "标记已付款" : "标记已报销";
+    const names = kind === "advance"
+      ? [...new Set(selected.map((item) => item.employee_name).filter(Boolean))].join("、")
+      : "";
+    const summary = `即将${action} ${selected.length} 条记录，合计 ¥${selectedTotal.toLocaleString()}${names ? `，垫付人：${names}` : ""}`;
+    if (!window.confirm(summary)) return;
+    const result = await onBatchSettle(selected.map((item) => kind === "technician" ? item.order : item), kind);
+    if (!result.failed) resetSelection();
+  }
+
+  function exportCompleted() {
+    const rows = completed.filter(matchesFilters).map((item) => {
+      const order = orderForItem(item);
+      const display = order ? orderStoreDisplay(order) : {};
+      const row = {
+        工单号: order?.ticketNo || "",
+        门店: display.storeName || `${display.city || ""}${display.mall || ""}`,
+        跟单人: employees.find((employee) => employee.id === order?.followerId)?.name || "",
+        金额: amountForItem(item),
+        登记时间: dateForItem(item),
+        [kind === "advance" ? "报销时间" : "结算时间"]: kind === "advance" ? item.reimbursed_at || "" : (kind === "client" ? order?.clientSettledAt : order?.technicianSettledAt) || "",
+      };
+      if (kind === "advance") row.垫付人 = item.employee_name || "";
+      if (kind === "technician") row.师傅 = technicians.find((tech) => tech.id === order?.assignedTechnicianId)?.name || "";
+      return row;
+    });
+    const sheet = XLSX.utils.json_to_sheet(rows);
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, sheet, "已完成记录");
+    XLSX.writeFile(workbook, `财务已完成-${kind}-${new Date().toISOString().slice(0, 10)}.xlsx`);
+  }
+
+  function previewText(item) {
+    const order = orderForItem(item);
+    const settledAt = kind === "advance"
+      ? item.reimbursed_at
+      : kind === "client"
+        ? order?.clientSettledAt
+        : order?.technicianSettledAt;
+    const settledLabel = kind === "advance" ? "已报销" : "已结算";
+    return `${order?.ticketNo || "垫付"} · ¥${amountForItem(item).toLocaleString()} · ${settledLabel}${settledAt ? ` ${fmtDateShort(settledAt)}` : ""}`;
+  }
+
   return (
     <div>
-      <div style={styles.groupTitle}>待处理（{pending.length}）</div>
-      {pending.length > 0 ? <div style={styles.list}>{pending.map(render)}</div> : <EmptyState text={`没有${emptyText.replace("记录", "待处理记录")}`} />}
-      <div style={styles.groupTitle}>已完成（{completed.length}）</div>
-      {completed.length > 0 ? <div style={styles.list}>{completed.map(render)}</div> : <div style={styles.completedEmpty}>暂无已完成记录</div>}
+      <div style={styles.filterBar}>
+        <select style={styles.filterInput} value={filters.range} onChange={(e) => updateFilter("range", e.target.value)}><option value="all">全部时间</option><option value="month">本月</option><option value="last_month">上月</option><option value="custom">自定义</option></select>
+        {filters.range === "custom" && <><input style={styles.filterInput} type="date" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} /><input style={styles.filterInput} type="date" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} /></>}
+        <select style={styles.filterInput} value={filters.storeId} onChange={(e) => updateFilter("storeId", e.target.value)}><option value="">全部门店</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.store_name}</option>)}</select>
+        <select style={styles.filterInput} value={filters.followerId} onChange={(e) => updateFilter("followerId", e.target.value)}><option value="">全部跟单人</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select>
+        {kind === "technician" && <select style={styles.filterInput} value={filters.technicianId} onChange={(e) => updateFilter("technicianId", e.target.value)}><option value="">全部师傅</option>{technicians.map((tech) => <option key={tech.id} value={tech.id}>{tech.name}</option>)}</select>}
+        {kind === "advance" && <select style={styles.filterInput} value={filters.employeeName} onChange={(e) => updateFilter("employeeName", e.target.value)}><option value="">全部垫付人</option>{employees.map((employee) => <option key={employee.id} value={employee.name}>{employee.name}</option>)}</select>}
+      </div>
+      <div style={styles.groupTitle}>待处理（{filteredPending.length}）</div>
+      <label style={styles.selectAllRow}><input type="checkbox" checked={allSelected} onChange={(e) => setSelectedIds(e.target.checked ? filteredPending.map((item) => item.id) : [])} /> 全选当前筛选结果</label>
+      {filteredPending.length > 0 ? <div style={styles.list}>{filteredPending.map((item) => <div key={item.id} style={styles.batchRow}><input type="checkbox" checked={selectedIds.includes(item.id)} onChange={(e) => setSelectedIds((current) => e.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />{render(item, { showSettlementDate: false })}</div>)}</div> : <EmptyState text="没有符合筛选条件的待处理记录" />}
+      {selected.length > 0 && <div style={styles.batchBar}>已选 {selected.length} 条，合计 ¥{selectedTotal.toLocaleString()} <button style={styles.primaryBtn} onClick={handleBatch}>{kind === "client" ? "批量标记已结算" : kind === "technician" ? "批量标记已付款" : "批量标记已报销"}</button></div>}
+      <div style={styles.completedHeader}><div><div style={styles.groupTitle}>已完成（{completed.length}） · 合计 ¥{completed.reduce((sum, item) => sum + amountForItem(item), 0).toLocaleString()}</div><div style={styles.completedPreview}>最近3条预览：{completed.slice(0, 3).map((item) => <div key={item.id}>{previewText(item)}</div>)}</div></div><div style={styles.completedActions}><button style={styles.ghostBtn} onClick={() => setCompletedOpen((open) => !open)}>{completedOpen ? "收起" : "展开查看全部"}</button><button style={styles.ghostBtn} onClick={exportCompleted}>导出已完成记录</button></div></div>
+      {completedOpen && <div style={styles.list}>{completed.map((item) => render(item, { showSettlementDate: true }))}</div>}
     </div>
   );
 }
 
-function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, onSettle }) {
+function FinanceSectionGroup({ pending, completed, emptyText, render }) {
+  return (
+    <div>
+      <div style={styles.groupTitle}>待处理（{pending.length}）</div>
+      {pending.length > 0 ? <div style={styles.list}>{pending.map((item) => render(item, { showSettlementDate: false }))}</div> : <EmptyState text={`没有${emptyText.replace("记录", "待处理记录")}`} />}
+      <div style={styles.groupTitle}>已完成（{completed.length}）</div>
+      {completed.length > 0 ? <div style={styles.list}>{completed.map((item) => render(item, { showSettlementDate: true }))}</div> : <div style={styles.completedEmpty}>暂无已完成记录</div>}
+    </div>
+  );
+}
+
+function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, showTypeTag = false, showSettlementDate = false, onSettle }) {
   const color = kind === "client" ? "#1F7A8C" : "#3E8F63";
   const label = kind === "client" ? "客户" : "师傅";
+  const storeDisplay = orderStoreDisplay(order);
+  const location = storeDisplay.storeName || `${storeDisplay.city}${storeDisplay.mall}` || order.mall || "未关联门店";
   return (
     <div style={styles.row}>
       <Link href={`/orders?open=${order.id}`} style={styles.rowMain}>
-        <span style={{ ...styles.typeTag, background: `${color}18`, color }}>{label}</span>
+        {showTypeTag && <span style={{ ...styles.typeTag, background: `${color}18`, color }}>{label}</span>}
         <span style={styles.ticketNo}>{order.ticketNo}</span>
-        <span style={styles.rowMall}>{order.mall}{suffix ? ` · ${suffix}` : ""}</span>
+        <span style={styles.rowMall}>{location}{suffix ? ` · ${suffix}` : ""}</span>
         <span style={styles.rowDate}>登记：{fmtDateShort(createdAt || order.createdAt)}</span>
-        <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>
+        {showSettlementDate && <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>}
       </Link>
       <div style={styles.rowRight}>
         <span style={styles.amount}>¥{amount}</span>
@@ -326,17 +443,19 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
   );
 }
 
-function FinanceAdvanceRow({ advance, orders, onEdit, onToggle }) {
+function FinanceAdvanceRow({ advance, orders, showTypeTag = false, showSettlementDate = false, onEdit, onToggle }) {
   const relatedOrder = advance.order_id ? orders.find((o) => o.id === advance.order_id) : null;
+  const relatedStore = relatedOrder ? orderStoreDisplay(relatedOrder) : null;
+  const location = relatedStore?.storeName || (relatedStore ? `${relatedStore.city}${relatedStore.mall}` : "");
   return (
     <div style={styles.row}>
       <div style={styles.rowMain}>
-        <span style={{ ...styles.typeTag, background: "#FBEEDD", color: "#A5661A" }}>垫付</span>
+        {showTypeTag && <span style={{ ...styles.typeTag, background: "#FBEEDD", color: "#A5661A" }}>垫付</span>}
         <span style={{ fontWeight: 700 }}>{advance.employee_name}</span>
-        <span style={styles.rowMall}>{advance.reason || "（无说明）"}</span>
+        <span style={styles.rowMall}>{location || advance.reason || "（无说明）"}{location && advance.reason ? ` · ${advance.reason}` : ""}</span>
         {relatedOrder && <Link href={`/orders?open=${relatedOrder.id}`} style={styles.relatedTag}>{relatedOrder.ticketNo}</Link>}
         <span style={styles.rowDate}>登记：{fmtDateShort(advance.created_at)}</span>
-        <span style={styles.rowDate}>报销：{advance.reimbursed_at ? fmtDateShort(advance.reimbursed_at) : "—"}</span>
+        {showSettlementDate && <span style={styles.rowDate}>报销：{advance.reimbursed_at ? fmtDateShort(advance.reimbursed_at) : "—"}</span>}
       </div>
       <div style={styles.rowRight}>
         <span style={styles.amount}>¥{advance.amount}</span>
@@ -468,6 +587,14 @@ const styles = {
   tab: { background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 7, padding: "7px 14px", fontSize: 12.5, fontWeight: 600, color: "#4C6169" },
   tabActive: { background: "#E3F0F1", borderColor: "#1F7A8C55", color: "#145560" },
   groupTitle: { fontSize: 12.5, fontWeight: 700, color: "#145560", margin: "14px 0 8px" },
+  filterBar: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "10px 12px", background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 9 },
+  filterInput: { border: "1px solid #E2E9E8", borderRadius: 7, background: "#fff", color: "#4C6169", padding: "6px 8px", fontSize: 12 },
+  selectAllRow: { display: "flex", alignItems: "center", gap: 6, color: "#4C6169", fontSize: 12, margin: "8px 0" },
+  batchRow: { display: "flex", alignItems: "flex-start", gap: 8 },
+  batchBar: { position: "sticky", bottom: 12, zIndex: 2, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, background: "#145560", color: "#fff", borderRadius: 9, padding: "10px 12px", margin: "-4px 0 12px", fontSize: 12.5, fontWeight: 600 },
+  completedHeader: { display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, background: "#fff", border: "1px solid #E2E9E8", borderRadius: 9, padding: "4px 10px 10px", marginTop: 12 },
+  completedPreview: { color: "#8FA1A8", fontSize: 11.5, lineHeight: 1.7 },
+  completedActions: { display: "flex", gap: 6, alignItems: "center", marginTop: 10 },
   completedEmpty: { color: "#8FA1A8", fontSize: 12, padding: "10px 0 18px" },
   emptyState: { display: "flex", flexDirection: "column", alignItems: "center", padding: "50px 0", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 12 },
   list: { display: "flex", flexDirection: "column", gap: 8, paddingBottom: 32 },
