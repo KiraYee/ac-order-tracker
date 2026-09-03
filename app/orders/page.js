@@ -908,6 +908,33 @@ function OrdersView({ userEmail }) {
 
   async function deleteOrder(order) {
     try {
+      const { data: expenseRows, error: expenseLookupError } = await supabase
+        .from("expense_records")
+        .select("id")
+        .eq("order_id", order.id);
+      if (expenseLookupError) throw new Error(`查询费用记录失败：${expenseLookupError.message || "未知错误"}`);
+
+      const { error: orderAdvancesError } = await supabase
+        .from("advances")
+        .delete()
+        .eq("order_id", order.id);
+      if (orderAdvancesError) throw new Error(`删除垫付记录失败：${orderAdvancesError.message || "未知错误"}`);
+
+      const expenseRecordIds = (expenseRows || []).map((record) => record.id).filter(Boolean);
+      if (expenseRecordIds.length > 0) {
+        const { error: expenseAdvancesError } = await supabase
+          .from("advances")
+          .delete()
+          .in("expense_record_id", expenseRecordIds);
+        if (expenseAdvancesError) throw new Error(`删除垫付记录失败：${expenseAdvancesError.message || "未知错误"}`);
+      }
+
+      const { error: expensesError } = await supabase
+        .from("expense_records")
+        .delete()
+        .eq("order_id", order.id);
+      if (expensesError) throw new Error(`删除费用记录失败：${expensesError.message || "未知错误"}`);
+
       const { error: visitsError } = await supabase.from("visits").delete().eq("order_id", order.id);
       if (visitsError) throw new Error(`删除服务记录失败：${visitsError.message || "未知错误"}`);
       const { error: orderError } = await supabase.from("orders").delete().eq("id", order.id);

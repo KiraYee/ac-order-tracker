@@ -158,7 +158,7 @@ function DashboardContent() {
             const expectedOverdue = expectedDiff !== null && expectedDiff < 0;
             const expectedSoon = expectedDiff !== null && expectedDiff >= 0 && expectedDiff <= 60 * 60 * 1000;
             return (
-              <Link key={o.id} href="/orders" style={styles.card}>
+              <Link key={o.id} href={`/orders?open=${o.id}`} style={styles.card}>
                 <div style={styles.cardTop}>
                   <span style={styles.ticketNo}>{o.ticketNo}</span>
                   <span style={{ ...styles.statusBadge, background: st.bg, color: st.fg }}>
