@@ -2,13 +2,14 @@
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import {
-  TrendingUp, CalendarCheck, DollarSign, Loader2, ClipboardList, Clock, AlertTriangle, Users,
+  TrendingUp, CalendarCheck, DollarSign, Loader2, ClipboardList, Clock, Users,
 } from "lucide-react";
 import { supabase } from "../lib/supabaseClient";
 import AppShell from "./components/AppShell";
+import OrderTimeoutNotice from "./components/OrderTimeoutNotice";
 import {
   STATUS_STYLE, OPEN_STATUSES, orderFromDb, fmtDate,
-  orderChargeTotal, orderProfit, orderTechnicianCostTotal, isInRange, getOrderTimeoutReminders, sortOrdersForDashboard, RANGE_LABELS,
+  orderChargeTotal, orderProfit, orderTechnicianCostTotal, isInRange, sortOrdersForDashboard, RANGE_LABELS,
 } from "../lib/dataHelpers";
 
 export default function DashboardPage() {
@@ -152,11 +153,6 @@ function DashboardContent() {
             const technician = technicians.find((item) => item.id === o.assignedTechnicianId);
             const technicianCost = orderTechnicianCostTotal(o);
             const technicianFeeSettled = !!o.technicianSettled;
-            const { assignmentOverdue, visitTimeUndetermined } = getOrderTimeoutReminders(o, now);
-            const expectedTime = o.expectedVisitTime ? new Date(o.expectedVisitTime).getTime() : null;
-            const expectedDiff = expectedTime === null || Number.isNaN(expectedTime) ? null : expectedTime - now;
-            const expectedOverdue = expectedDiff !== null && expectedDiff < 0;
-            const expectedSoon = expectedDiff !== null && expectedDiff >= 0 && expectedDiff <= 60 * 60 * 1000;
             return (
               <Link key={o.id} href={`/orders?open=${o.id}`} style={styles.card}>
                 <div style={styles.cardTop}>
@@ -171,24 +167,11 @@ function DashboardContent() {
                   {o.brand ? <span style={styles.cardBrand}> · {o.brand}</span> : null}
                 </div>
                 <div style={styles.cardIssue}>{o.issueDesc}</div>
-                {o.status === "待上门" && (!expectedOverdue || !hasVisits) && (
-                  <div style={{ ...styles.expectedVisit, ...(expectedSoon ? styles.expectedVisitSoon : {}), ...(expectedOverdue ? styles.expectedVisitOverdue : {}) }}>
-                    {expectedOverdue ? <AlertTriangle size={14} /> : <Clock size={14} />}
-                    <span>
-                      {expectedTime === null || Number.isNaN(expectedTime)
-                        ? "⚠ 未填写预计上门时间"
-                        : expectedOverdue
-                          ? "⚠️ 已超过预计上门时间未上门"
-                          : expectedSoon
-                            ? `即将上门 · ${formatExpectedTime(o.expectedVisitTime)}`
-                            : `预计上门：${formatExpectedTime(o.expectedVisitTime)}`}
-                    </span>
-                  </div>
-                )}
+                <OrderTimeoutNotice order={o} now={now} />
                 <div style={styles.cardMeta}>
                   <Clock size={12} /> 报修时间：{fmtDate(o.reportTime)}
                 </div>
-                {(client || technician || technicianCost > 0 || assignmentOverdue || visitTimeUndetermined) && (
+                {(client || technician || technicianCost > 0) && (
                   <div style={styles.cardMetaRow}>
                     {client && <span style={styles.cardMeta}>甲方：{client.name}</span>}
                     <span style={{ ...styles.cardMeta, ...(technicianCost > 0 ? { color: technicianFeeSettled ? "#2C6B45" : "#A5661A" } : {}) }}>
@@ -197,8 +180,6 @@ function DashboardContent() {
                     </span>
                   </div>
                 )}
-                {assignmentOverdue && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
-                {visitTimeUndetermined && <div style={styles.timeoutAlert}>⚠️ 待上门超2天未确定具体时间</div>}
               </Link>
             );
           })}
@@ -206,15 +187,6 @@ function DashboardContent() {
       )}
     </div>
   );
-}
-
-function formatExpectedTime(iso) {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "—";
-  const now = new Date();
-  const sameDay = date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate();
-  const dateLabel = sameDay ? "今天" : `${date.getMonth() + 1}月${date.getDate()}日`;
-  return `${dateLabel} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
 const styles = {
@@ -243,10 +215,6 @@ const styles = {
   cardBrand: { fontWeight: 700, color: "#16262B", fontSize: 14.5 },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2, flexWrap: "wrap" },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
-  expectedVisit: { display: "flex", alignItems: "center", gap: 6, background: "#E3F0F1", border: "1px solid #1F7A8C55", color: "#145560", borderRadius: 8, padding: "7px 9px", fontSize: 12.5, fontWeight: 700, marginTop: 2 },
-  expectedVisitSoon: { background: "#FBEEDD", borderColor: "#E08E3380", color: "#A5661A" },
-  expectedVisitOverdue: { background: "#F6E7E6", borderColor: "#C1443D80", color: "#A23931" },
   cardMeta: { fontSize: 11, color: "#8FA1A8", display: "flex", alignItems: "center", gap: 4 },
-  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   centerState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "80px 0" },
 };

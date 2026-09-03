@@ -10,11 +10,12 @@ import { pinyin } from "pinyin-pro";
 import * as XLSX from "xlsx";
 import { useSearchParams } from "next/navigation";
 import AppShell from "../components/AppShell";
+import OrderTimeoutNotice from "../components/OrderTimeoutNotice";
 import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName, getOrderTimeoutReminders,
+  itemsChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
   ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
@@ -1197,7 +1198,6 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const client = clients.find((c) => c.id === order.clientId);
   const technicianCost = orderTechnicianCostTotal(order);
-  const { assignmentOverdue, expectedVisitOverdue, visitTimeUndetermined } = getOrderTimeoutReminders(order, now);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -1213,6 +1213,7 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
         {order.brand ? <span style={styles.cardBrand}> · {order.brand}</span> : null}
       </div>
       <div style={styles.cardIssue}>{order.issueDesc}</div>
+      <OrderTimeoutNotice order={order} now={now} />
       <div style={styles.cardMetaRow}>
         <span style={styles.cardMeta}>
           <Clock size={12} /> 报修时间：{fmtDate(order.reportTime)}
@@ -1232,9 +1233,6 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
           </span>
         </div>
       )}
-      {assignmentOverdue && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
-      {expectedVisitOverdue && <div style={styles.timeoutAlert}>⚠️ 已超过预计上门时间未上门</div>}
-      {visitTimeUndetermined && <div style={styles.timeoutAlert}>⚠️ 待上门超2天未确定具体时间</div>}
       {lastVisit && (
         <div style={styles.lastVisitRow}>
           {(() => {
@@ -2648,7 +2646,6 @@ const styles = {
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2, flexWrap: "wrap" },
   completedTimeBadge: { display: "inline-flex", alignItems: "center", gap: 4, background: "#E4F3E9", border: "1px solid #3E8F6380", color: "#2C6B45", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },
-  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   saveStateHint: { color: "#8FA1A8", fontSize: 11.5, marginTop: 5 },
   saveStateSuccess: { color: "#2C6B45", fontSize: 11.5, marginTop: 5 },
   saveStateError: { color: "#A23931", fontSize: 11.5, marginTop: 5 },
