@@ -14,6 +14,7 @@ import WorkOrderCard from "../components/WorkOrderCard";
 import OrderTimeoutNotice from "../components/OrderTimeoutNotice";
 import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince, WORKLIST_GROUPS, getWorklistGroup,
+  getOrderExceptions,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
   itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
@@ -901,8 +902,18 @@ function OrdersView({ userEmail }) {
     ...group,
     orders: filtered
       .filter((order) => getWorklistGroup(order)?.key === group.key)
-      .sort((a, b) => new Date(b.reportTime || 0) - new Date(a.reportTime || 0)),
-  })).filter((group) => group.orders.length > 0), [filtered]);
+      .sort((a, b) => {
+        if (group.key === "closed") {
+          const exceptionDiff = getOrderExceptions(b, now).length - getOrderExceptions(a, now).length;
+          if (exceptionDiff !== 0) return exceptionDiff;
+        }
+        if (group.key === "scheduled") {
+          const visitTimeDiff = new Date(a.expectedVisitTime).getTime() - new Date(b.expectedVisitTime).getTime();
+          if (visitTimeDiff !== 0) return visitTimeDiff;
+        }
+        return new Date(b.reportTime || 0).getTime() - new Date(a.reportTime || 0).getTime();
+      }),
+  })).filter((group) => group.orders.length > 0), [filtered, now]);
 
   const counts = useMemo(() => {
     const c = { all: orders.length };
@@ -961,7 +972,7 @@ function OrdersView({ userEmail }) {
       <div style={styles.headerRow}>
         <div>
           <div style={styles.title}>工单</div>
-          <div style={styles.subtitle}>按报修时间从近到远排列</div>
+          <div style={styles.subtitle}>待上门工单按预计上门时间从近到远排列</div>
         </div>
         <div style={styles.headerActions}>
           <div style={styles.exportWrap}>

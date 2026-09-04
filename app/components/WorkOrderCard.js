@@ -60,6 +60,7 @@ export default function WorkOrderCard({
           </div>
           <div style={styles.topRight}>
             <OrderTimeoutNotice order={order} now={now} />
+            {groupKey === "closed" ? <span style={{ ...styles.statusLabel, ...(order.status === "已取消" ? styles.cancelledLabel : styles.completedLabel) }}>{order.status}</span> : null}
             {action ? <button type="button" style={{ ...styles.action, background: groupKey === "verify" ? "#C99A1D" : groupKey === "dispatch" ? "#7A63B8" : "#6B7B83" }} onClick={(event) => { event.stopPropagation(); (onAction || onClick)?.(); }}>{actionLabel}</button> : (
               <div style={{ ...styles.when, color: style.fg }}>
                 {order.status === "维修中" ? <span className="work-order-live-dot" /> : null}
@@ -93,6 +94,9 @@ const styles = {
   ticketNo: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 10.5, color: "#9AA6AD", flexShrink: 0 },
   when: { display: "flex", alignItems: "center", gap: 5, flexDirection: "column", textAlign: "right", flexShrink: 0, fontSize: 12 },
   whenTime: { color: "#9AA6AD", fontWeight: 500 },
+  statusLabel: { display: "inline-flex", alignItems: "center", borderRadius: 12, padding: "3px 8px", fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" },
+  completedLabel: { background: "#E4F3E9", color: "#2C6B45" },
+  cancelledLabel: { background: "#F3EAEA", color: "#8A5252" },
   title: { fontSize: 14.5, fontWeight: 600, lineHeight: 1.4, color: "#14212B", minWidth: 0 },
   address: { display: "flex", alignItems: "center", gap: 4, color: "#5E6C76", fontSize: 11.5, marginTop: 4 },
   description: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
