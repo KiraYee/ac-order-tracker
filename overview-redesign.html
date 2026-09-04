@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>总览 · 改进版</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --paper:#F6F5F1;
+    --ink:#16211F;
+    --ink-soft:#5C6B67;
+    --ink-faint:#96A19D;
+    --line:#DCDFDA;
+    --line-soft:#E9EAE6;
+    --brand:#1B6E76;
+    --brand-soft:#E4EFEE;
+    --sev-high:#B5450C;
+    --sev-high-soft:#F5E4DA;
+    --sev-mid:#8A6A0F;
+    --sev-mid-soft:#F2ECD6;
+    --surface:#FFFFFF;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",Helvetica,Arial,sans-serif;
+  }
+  .mono{
+    font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+    font-feature-settings:"tnum";
+  }
+
+  .page{
+    max-width:820px;
+    margin:0 auto;
+    padding:48px 24px 96px;
+  }
+
+  /* header */
+  .top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    margin-bottom:6px;
+  }
+  .top h1{
+    font-size:26px;
+    font-weight:700;
+    margin:0;
+    letter-spacing:0.2px;
+  }
+  .top-link{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    font-size:13px;
+    color:var(--ink-soft);
+    text-decoration:none;
+    padding-bottom:3px;
+    border-bottom:1px solid transparent;
+    transition:color .15s, border-color .15s;
+  }
+  .top-link:hover{color:var(--brand);border-color:var(--brand);}
+  .top-link svg{width:13px;height:13px;}
+  .subtitle{
+    font-size:13.5px;
+    color:var(--ink-faint);
+    margin:0 0 40px;
+  }
+
+  section{margin-bottom:44px;}
+  section:last-child{margin-bottom:0;}
+
+  .sec-head{
+    display:flex;
+    align-items:baseline;
+    gap:8px;
+    margin-bottom:16px;
+    padding-bottom:10px;
+    border-bottom:1px solid var(--line);
+  }
+  .sec-head h2{
+    font-size:15px;
+    font-weight:700;
+    margin:0;
+  }
+  .sec-count{
+    font-size:12.5px;
+    color:var(--ink-faint);
+  }
+
+  /* 异常事项 */
+  .anomaly-list{
+    display:flex;
+    flex-direction:column;
+  }
+  .anomaly-row{
+    display:grid;
+    grid-template-columns:22px 88px 1fr auto 14px;
+    align-items:center;
+    gap:14px;
+    padding:14px 4px;
+    border-bottom:1px solid var(--line-soft);
+    cursor:pointer;
+    transition:background .12s;
+  }
+  .anomaly-row:hover{background:var(--surface);}
+  .anomaly-row:last-child{border-bottom:none;}
+
+  .a-icon{
+    width:18px;height:18px;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .a-icon svg{width:16px;height:16px;}
+  .a-icon.high{color:var(--sev-high);}
+  .a-icon.mid{color:var(--sev-mid);}
+
+  .a-id{
+    font-size:12px;
+    color:var(--ink-faint);
+  }
+  .a-title{
+    font-size:14px;
+    font-weight:600;
+    color:var(--ink);
+    white-space:nowrap;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+  .a-status{
+    font-size:12.5px;
+    font-weight:600;
+    white-space:nowrap;
+    text-align:right;
+  }
+  .a-status.high{color:var(--sev-high);}
+  .a-status.mid{color:var(--sev-mid);}
+  .a-chev{
+    width:14px;height:14px;
+    color:var(--ink-faint);
+  }
+
+  /* 财务简报 */
+  .fin-grid{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+  }
+  .fin-col{
+    padding:4px 24px;
+    border-left:1px solid var(--line);
+  }
+  .fin-col:first-child{
+    padding-left:4px;
+    border-left:none;
+  }
+  .fin-icon{
+    width:18px;height:18px;
+    color:var(--ink-faint);
+    margin-bottom:14px;
+  }
+  .fin-num{
+    font-size:30px;
+    font-weight:700;
+    letter-spacing:-0.3px;
+    line-height:1;
+    margin-bottom:8px;
+  }
+  .fin-label{
+    font-size:12.5px;
+    color:var(--ink-soft);
+    line-height:1.5;
+  }
+
+  /* 资源分布 */
+  .res-block{margin-bottom:26px;}
+  .res-block:last-child{margin-bottom:0;}
+  .res-block-head{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    margin-bottom:14px;
+    font-size:13px;
+    color:var(--ink-soft);
+  }
+  .res-block-head svg{width:15px;height:15px;color:var(--ink-faint);}
+  .res-block-head b{color:var(--ink);font-weight:600;}
+  .res-block-head .meta{color:var(--ink-faint);}
+
+  .chip-row{
+    display:flex;
+    flex-wrap:wrap;
+    gap:28px;
+    align-items:flex-end;
+  }
+  .chip{
+    min-width:64px;
+  }
+  .chip.muted{opacity:0.55;}
+  .chip-top{
+    display:flex;
+    align-items:baseline;
+    gap:6px;
+    margin-bottom:6px;
+    white-space:nowrap;
+  }
+  .chip-city{
+    font-size:13px;
+    color:var(--ink);
+  }
+  .chip-count{
+    font-size:13px;
+    font-weight:700;
+    color:var(--ink);
+  }
+  .chip-bar-track{
+    height:3px;
+    background:var(--line-soft);
+    border-radius:2px;
+    overflow:hidden;
+  }
+  .chip-bar-fill{
+    height:100%;
+    background:var(--brand);
+    border-radius:2px;
+  }
+  .chip.muted .chip-bar-fill{background:var(--ink-faint);}
+
+  .view-all{
+    display:inline-flex;
+    align-items:center;
+    gap:4px;
+    font-size:12.5px;
+    color:var(--brand);
+    text-decoration:none;
+    padding-bottom:8px;
+    border-bottom:1px solid transparent;
+  }
+  .view-all:hover{border-color:var(--brand);}
+  .view-all svg{width:12px;height:12px;}
+
+  @media (max-width:640px){
+    .fin-grid{grid-template-columns:1fr;gap:22px;}
+    .fin-col{border-left:none;padding-left:4px;border-top:1px solid var(--line);padding-top:18px;}
+    .fin-col:first-child{border-top:none;padding-top:4px;}
+    .anomaly-row{grid-template-columns:20px 1fr 14px;grid-template-areas:"icon title chev" ". status .";row-gap:4px;}
+    .a-id{display:none;}
+    .a-title{grid-area:title;white-space:normal;}
+    .a-icon{grid-area:icon;}
+    .a-chev{grid-area:chev;}
+    .a-status{grid-area:status;text-align:left;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="top">
+    <h1>总览</h1>
+    <a class="top-link" href="#">
+      工单列表
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
+  </div>
+  <p class="subtitle">跨模块掌握异常、财务与资源情况</p>
+
+  <!-- 异常事项 -->
+  <section>
+    <div class="sec-head">
+      <h2>异常事项</h2>
+      <span class="sec-count">4</span>
+    </div>
+    <div class="anomaly-list">
+
+      <div class="anomaly-row">
+        <div class="a-icon high">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+        </div>
+        <div class="a-id mono">KT-0041</div>
+        <div class="a-title">嘉兴 · 南湖天地 · DRUNK BAKER</div>
+        <div class="a-status high">超预计上门未上门</div>
+        <svg class="a-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+      <div class="anomaly-row">
+        <div class="a-icon high">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6"/><line x1="19" y1="8" x2="19" y2="8.01"/></svg>
+        </div>
+        <div class="a-id mono">KT202608311102</div>
+        <div class="a-title">上海 · test · test</div>
+        <div class="a-status high">超2天未安排师傅</div>
+        <svg class="a-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+      <div class="anomaly-row">
+        <div class="a-icon mid">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.9" y1="4.9" x2="19.1" y2="19.1"/></svg>
+        </div>
+        <div class="a-id mono">KT-0038</div>
+        <div class="a-title">南通 · DRUNK BAKER · 万象城</div>
+        <div class="a-status mid">未提交验收资料</div>
+        <svg class="a-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+      <div class="anomaly-row">
+        <div class="a-icon mid">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="4.9" y1="4.9" x2="19.1" y2="19.1"/></svg>
+        </div>
+        <div class="a-id mono">KT-0043</div>
+        <div class="a-title">昆山 · 望丘山 · 昆山金鹰</div>
+        <div class="a-status mid">未提交验收资料</div>
+        <svg class="a-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- 财务简报 -->
+  <section>
+    <div class="sec-head">
+      <h2>财务简报</h2>
+    </div>
+    <div class="fin-grid">
+      <div class="fin-col">
+        <svg class="fin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.4"/><line x1="6" y1="10" x2="6" y2="10.01"/><line x1="18" y1="14" x2="18" y2="14.01"/></svg>
+        <div class="fin-num mono">¥1,060</div>
+        <div class="fin-label">应收甲方 · 1 单未结算</div>
+      </div>
+      <div class="fin-col">
+        <svg class="fin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/></svg>
+        <div class="fin-num mono">¥400</div>
+        <div class="fin-label">未支付师傅款</div>
+      </div>
+      <div class="fin-col">
+        <svg class="fin-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="8" y1="16" x2="13" y2="16"/></svg>
+        <div class="fin-num mono">¥798</div>
+        <div class="fin-label">待报销 · 3 笔</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 资源分布 -->
+  <section>
+    <div class="sec-head">
+      <h2>资源分布</h2>
+    </div>
+
+    <div class="res-block">
+      <div class="res-block-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        <b>师傅</b>
+      </div>
+      <div class="chip-row">
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">上海</span><span class="chip-count mono">5</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:100%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">苏州</span><span class="chip-count mono">3</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:68%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">昆山</span><span class="chip-count mono">1</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:36%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">南通</span><span class="chip-count mono">1</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:36%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">无锡</span><span class="chip-count mono">1</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:36%"></div></div>
+        </div>
+        <div class="chip muted">
+          <div class="chip-top"><span class="chip-city">未分类</span><span class="chip-count mono">2</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:0%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="res-block">
+      <div class="res-block-head">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7"/><path d="M4 10v10h16V10"/><path d="M9 20v-6h6v6"/></svg>
+        <b>服务门店</b>
+        <span class="meta">· 共 12 城市 · 5 个品牌</span>
+      </div>
+      <div class="chip-row">
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">上海</span><span class="chip-count mono">15</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:100%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">苏州</span><span class="chip-count mono">8</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:63%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">南京</span><span class="chip-count mono">5</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:47%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">昆山</span><span class="chip-count mono">2</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:31%"></div></div>
+        </div>
+        <div class="chip">
+          <div class="chip-top"><span class="chip-city">深圳</span><span class="chip-count mono">2</span></div>
+          <div class="chip-bar-track"><div class="chip-bar-fill" style="width:31%"></div></div>
+        </div>
+        <a class="view-all" href="#">
+          查看全部城市
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </a>
+      </div>
+    </div>
+
+  </section>
+
+</div>
+</body>
+</html>

@@ -71,6 +71,7 @@ function orderFromDb(row) {
     updatedAt: row.updated_at,
     pendingAssignmentAt: row.pending_assignment_at,
     pendingVisitAt: row.pending_visit_at,
+    inProgressAt: row.in_progress_at,
     relatedOrderId: row.related_order_id,
     assignedTechnicianId: row.assigned_technician_id,
     clientSettled: row.client_settled,
@@ -255,6 +256,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           status,
           pending_assignment_at: status === "待派工" ? (order?.status === status ? order.pendingAssignmentAt : now) : null,
           pending_visit_at: status === "待上门" ? (order?.status === status ? order.pendingVisitAt : now) : null,
+          in_progress_at: status === "维修中" ? (order?.status === status ? order.inProgressAt : now) : null,
           updated_at: now,
         })
         .eq("id", orderId);
@@ -266,6 +268,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
           updatedAt: now,
           pendingAssignmentAt: status === "待派工" ? (o.status === status ? o.pendingAssignmentAt : now) : null,
           pendingVisitAt: status === "待上门" ? (o.status === status ? o.pendingVisitAt : now) : null,
+          inProgressAt: status === "维修中" ? (o.status === status ? o.inProgressAt : now) : null,
         } : o))
       );
       setErrorMsg("");
@@ -313,13 +316,18 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       if (visit.resultType === "resolved") nextStatus = "已完成";
       else if (nextStatus !== "已取消") nextStatus = "维修中";
 
+      const completionUpdatedAt = new Date().toISOString();
+      const nextInProgressAt = nextStatus === "维修中"
+        ? (order?.status === "维修中" ? order.inProgressAt : completionUpdatedAt)
+        : null;
       const { error: updErr } = await supabase
         .from("orders")
         .update({
           status: nextStatus,
           pending_assignment_at: null,
           pending_visit_at: null,
-          updated_at: new Date().toISOString(),
+          in_progress_at: nextInProgressAt,
+          updated_at: completionUpdatedAt,
         })
         .eq("id", orderId);
       if (updErr) throw updErr;
@@ -328,7 +336,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
-            ? { ...o, status: nextStatus, updatedAt: new Date().toISOString(), visits: [...o.visits, newVisit] }
+            ? { ...o, status: nextStatus, inProgressAt: nextInProgressAt, updatedAt: completionUpdatedAt, visits: [...o.visits, newVisit] }
             : o
         )
       );
@@ -598,8 +606,6 @@ function OrderCard({ order, technicians, onClick }) {
           })()}
         </div>
       )}
-      {order.status === "待派工" && !order.assignedTechnicianId && isOverdueBy(order.pendingAssignmentAt) && <div style={styles.timeoutAlert}>🔴 已超过2天未安排师傅</div>}
-      {order.status === "待上门" && isOverdueBy(order.pendingVisitAt) && <div style={styles.timeoutAlert}>🔴 已超过2天未上门</div>}
     </button>
   );
 }
@@ -1297,7 +1303,6 @@ const styles = {
   statusBadge: { display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 700, padding: "3px 8px", borderRadius: 20 },
   cardMall: { fontWeight: 700, fontSize: 14.5, color: "#16262B" },
   cardBrand: { fontWeight: 700, color: "#16262B", fontSize: 14.5 },
-  timeoutAlert: { color: "#A23931", background: "#F6E7E6", borderRadius: 7, padding: "5px 8px", fontSize: 11.5, fontWeight: 700 },
   cardIssue: { fontSize: 12.5, color: "#4C6169", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" },
   cardMetaRow: { display: "flex", gap: 12, marginTop: 2 },
   cardMeta: { display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: "#8FA1A8" },

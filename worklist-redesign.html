@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>工单 · 改进版</title>
+<style>
+  :root{
+    --bg:#F5F6F7;
+    --surface:#FFFFFF;
+    --ink:#14212B;
+    --ink-soft:#5E6C76;
+    --ink-faint:#9AA6AD;
+    --line:#E4E8EA;
+    --line-soft:#EEF1F2;
+    --brand:#1B6E76;
+    --brand-soft:#E6F0EF;
+    --urgent:#B5450C;
+    --urgent-bg:#FBEDE4;
+    --urgent-dot:#D9631F;
+    --verify:#8A6A0F;
+    --verify-bg:#FBF2D9;
+    --verify-dot:#C99A1D;
+    --dispatch:#5B4B8A;
+    --dispatch-bg:#EFEAF8;
+    --dispatch-dot:#7A63B8;
+    --progress:#1D6FBF;
+    --progress-bg:#E7F1FB;
+    --progress-dot:#2B84D9;
+    --wait-dot:#B7BEC2;
+    --done:#2F7A4F;
+    --done-bg:#E9F4EC;
+    --cancel:#8A5252;
+    --cancel-bg:#F3EAEA;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei","Segoe UI",Helvetica,Arial,sans-serif;
+    font-feature-settings:"tnum";
+  }
+  .page{
+    max-width:840px;
+    margin:0 auto;
+    padding:32px 20px 80px;
+  }
+  .page-head{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    margin-bottom:6px;
+  }
+  .page-head h1{
+    font-size:20px;
+    font-weight:700;
+    margin:0;
+    letter-spacing:0.2px;
+  }
+  .page-head .date{
+    font-size:13px;
+    color:var(--ink-faint);
+  }
+  .subline{
+    font-size:13px;
+    color:var(--ink-soft);
+    margin-bottom:28px;
+  }
+
+  .group{
+    margin-bottom:30px;
+  }
+  .group-head{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    margin-bottom:10px;
+  }
+  .group-head .marker{
+    width:6px;
+    height:6px;
+    border-radius:50%;
+  }
+  .marker.urgent{background:var(--urgent-dot);}
+  .marker.wait{background:var(--wait-dot);}
+  .marker.scheduled{background:var(--brand);}
+  .marker.closed{background:var(--ink-faint);}
+  .marker.verify{background:var(--verify-dot);}
+  .marker.dispatch{background:var(--dispatch-dot);}
+  .marker.progress{background:var(--progress-dot);}
+
+  .group.dispatch .rows{border-color:var(--line);}
+  .row.dispatch-row{background:var(--surface);}
+  .dispatch-tag{
+    display:inline-block;
+    font-size:11px;
+    font-weight:600;
+    color:var(--dispatch);
+    background:#E2D9F5;
+    padding:1px 7px;
+    border-radius:100px;
+    margin-left:8px;
+    vertical-align:middle;
+  }
+  .btn-dispatch{
+    font-size:12.5px;
+    font-weight:600;
+    color:#fff;
+    background:var(--dispatch-dot);
+    border:none;
+    padding:6px 12px;
+    border-radius:6px;
+    cursor:pointer;
+  }
+  .btn-dispatch:hover{background:#664F9E;}
+  .btn-dispatch.done{background:var(--done);}
+  .dispatch-hint{font-size:11px;color:var(--dispatch);}
+
+  .group.progress .rows{border-color:var(--line);}
+  .row.progress-row{background:var(--surface);}
+  .progress-dot-live{
+    display:inline-block;
+    width:7px;height:7px;
+    border-radius:50%;
+    background:var(--progress-dot);
+    margin-right:6px;
+    vertical-align:middle;
+    animation:pulse 1.6s infinite;
+  }
+  @keyframes pulse{
+    0%{box-shadow:0 0 0 0 rgba(43,132,217,0.45);}
+    70%{box-shadow:0 0 0 6px rgba(43,132,217,0);}
+    100%{box-shadow:0 0 0 0 rgba(43,132,217,0);}
+  }
+  .progress-tag{
+    font-size:11px;
+    font-weight:600;
+    color:var(--progress);
+  }
+
+  .group.verify .rows{border-color:var(--line);}
+  .row.verify-row{background:var(--surface);}
+  .verify-tag{
+    display:inline-block;
+    font-size:11px;
+    font-weight:600;
+    color:var(--verify);
+    background:#F5E9B8;
+    padding:1px 7px;
+    border-radius:100px;
+    margin-left:8px;
+    vertical-align:middle;
+  }
+  .verify-actions{
+    display:flex;
+    flex-direction:column;
+    align-items:flex-end;
+    gap:6px;
+  }
+  .btn-verify{
+    font-size:12.5px;
+    font-weight:600;
+    color:#fff;
+    background:var(--verify-dot);
+    border:none;
+    padding:6px 12px;
+    border-radius:6px;
+    cursor:pointer;
+  }
+  .btn-verify:hover{background:#B4870F;}
+  .btn-verify.done{
+    background:var(--done);
+  }
+  .verify-hint{
+    font-size:11px;
+    color:var(--verify);
+  }
+
+  .group-title{
+    font-size:13.5px;
+    font-weight:600;
+    color:var(--ink);
+  }
+  .group-count{
+    font-size:12.5px;
+    color:var(--ink-faint);
+  }
+
+  .rows{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+  }
+  .row{
+    display:grid;
+    grid-template-columns:96px 1fr 108px;
+    gap:16px;
+    padding:14px 16px;
+    border-bottom:1px solid var(--line-soft);
+    align-items:start;
+  }
+  .row:last-child{border-bottom:none;}
+
+  .row .id{
+    font-size:12px;
+    color:var(--ink-faint);
+    padding-top:2px;
+    font-variant-numeric:tabular-nums;
+  }
+
+  .row .main .title{
+    font-size:14.5px;
+    font-weight:600;
+    color:var(--ink);
+    margin-bottom:3px;
+    line-height:1.4;
+  }
+  .row .main .title .loc-brand{
+    color:var(--brand);
+  }
+  .row .main .desc{
+    font-size:13px;
+    color:var(--ink-soft);
+    line-height:1.5;
+    max-width:56ch;
+  }
+  .row .main .desc.clamped{
+    display:-webkit-box;
+    -webkit-line-clamp:1;
+    -webkit-box-orient:vertical;
+    overflow:hidden;
+  }
+  .row .main .expand{
+    font-size:12px;
+    color:var(--brand);
+    cursor:pointer;
+    margin-top:2px;
+    display:inline-block;
+  }
+  .row .main .meta{
+    margin-top:8px;
+    font-size:12px;
+    color:var(--ink-faint);
+    display:flex;
+    gap:14px;
+    flex-wrap:wrap;
+  }
+  .row .main .meta span b{
+    color:var(--ink-soft);
+    font-weight:500;
+  }
+
+  .row .when{
+    text-align:right;
+  }
+  .pill{
+    display:inline-flex;
+    flex-direction:column;
+    align-items:flex-end;
+    gap:2px;
+  }
+  .pill .time{
+    font-size:13.5px;
+    font-weight:700;
+  }
+  .pill .label{
+    font-size:11px;
+  }
+  .pill.urgent .time{color:var(--urgent);}
+  .pill.urgent .label{color:var(--urgent);}
+  .pill.scheduled .time{color:var(--ink);}
+  .pill.scheduled .label{color:var(--ink-faint);}
+  .pill.wait .time{color:var(--ink-faint);font-weight:600;font-size:12.5px;}
+  .pill.wait .label{color:var(--ink-faint);}
+
+  .badge{
+    display:inline-block;
+    font-size:11px;
+    padding:2px 8px;
+    border-radius:100px;
+    font-weight:600;
+    margin-top:6px;
+  }
+  .badge.done{background:var(--done-bg);color:var(--done);}
+  .badge.cancel{background:var(--cancel-bg);color:var(--cancel);}
+
+  /* closed group collapsed styling */
+  .group.closed .rows{
+    background:transparent;
+    border:none;
+  }
+  .group.closed .row{
+    background:var(--surface);
+    border:1px solid var(--line-soft);
+    border-radius:8px;
+    margin-bottom:6px;
+    opacity:0.85;
+  }
+  .group.closed .row:last-child{margin-bottom:0;}
+
+  .toggle-closed{
+    font-size:12.5px;
+    color:var(--brand);
+    cursor:pointer;
+    user-select:none;
+  }
+  .closed-body{display:none;}
+  .closed-body.open{display:block;}
+
+  .note{
+    font-size:12px;
+    color:var(--ink-faint);
+    margin-top:36px;
+    padding-top:16px;
+    border-top:1px dashed var(--line);
+    line-height:1.6;
+  }
+
+  @media (max-width:560px){
+    .row{grid-template-columns:1fr;gap:6px;}
+    .row .id{order:0;}
+    .row .when{text-align:left;}
+    .pill{align-items:flex-start;flex-direction:row;gap:6px;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="page-head">
+    <h1>工单</h1>
+    <div class="date">8月31日 · 14 单</div>
+  </div>
+  <div class="subline">完整状态链：待核实 → 待派工 → 已指派师傅·时间待定 → 待上门 → 维修中 → 已完成/已取消</div>
+
+  <!-- 待核实 -->
+  <div class="group verify">
+    <div class="group-head">
+      <span class="marker verify"></span>
+      <span class="group-title">待核实</span>
+      <span class="group-count">2</span>
+    </div>
+    <div class="rows">
+      <div class="row verify-row" id="row-0050">
+        <div class="id">KT-0050</div>
+        <div class="main">
+          <div class="title">杭州 · <span class="loc-brand">滨江万象城</span> · 望丘山 <span class="verify-tag">新报修</span></div>
+          <div class="desc">客户说3楼中央空调不制冷，具体是哪台机组还没说清楚，地址也需要再确认一下门牌号</div>
+          <div class="meta">
+            <span>报修 9/3 09:12</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>提交人 <b>客服-小林</b></span>
+          </div>
+        </div>
+        <div class="verify-actions">
+          <button class="btn-verify" onclick="markVerified('row-0050', this)">核实并派单</button>
+          <span class="verify-hint">等待确认信息</span>
+        </div>
+      </div>
+
+      <div class="row verify-row" id="row-0051">
+        <div class="id">KT-0051</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">虹桥天地</span> · DRUNK BAKER <span class="verify-tag">疑似重复</span></div>
+          <div class="desc">和 KT-0038 地址接近，需核对是否为同一台机组的重复报修</div>
+          <div class="meta">
+            <span>报修 9/3 08:47</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>提交人 <b>门店自报</b></span>
+          </div>
+        </div>
+        <div class="verify-actions">
+          <button class="btn-verify" onclick="markVerified('row-0051', this)">核实并派单</button>
+          <span class="verify-hint">等待确认信息</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 待派工：核实通过，还没有找到师傅 -->
+  <div class="group dispatch">
+    <div class="group-head">
+      <span class="marker dispatch"></span>
+      <span class="group-title">待派工</span>
+      <span class="group-count">1</span>
+    </div>
+    <div class="rows">
+      <div class="row dispatch-row" id="row-0052">
+        <div class="id">KT-0052</div>
+        <div class="main">
+          <div class="title">南京 · <span class="loc-brand">金鹰世界</span> · 望丘山 <span class="dispatch-tag">已核实</span></div>
+          <div class="desc">中央空调滤网更换，客户地址、需求已确认，等待安排师傅</div>
+          <div class="meta">
+            <span>核实时间 9/3 10:20</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>未指派</b></span>
+          </div>
+        </div>
+        <div class="verify-actions">
+          <button class="btn-dispatch" onclick="markDispatched('row-0052', this)">指派师傅</button>
+          <span class="dispatch-hint">等待安排师傅</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 已指派 · 待定时间：师傅定了，具体上门时间没定 -->
+  <div class="group">
+    <div class="group-head">
+      <span class="marker wait"></span>
+      <span class="group-title">已指派师傅 · 时间待定</span>
+      <span class="group-count">4</span>
+    </div>
+    <div class="rows">
+      <div class="row">
+        <div class="id">KT-0048</div>
+        <div class="main">
+          <div class="title">苏州 · <span class="loc-brand">吴江万象汇</span> · 望丘山</div>
+          <div class="desc">等滤网，保养</div>
+          <div class="meta">
+            <span>报修 8/31 19:53</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>朱大朋</b></span>
+          </div>
+        </div>
+        <div class="when"><div class="pill wait"><div class="time">待师傅定时间</div></div></div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0045</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">江桥万达</span> · 望丘山</div>
+          <div class="desc">滤网保养</div>
+          <div class="meta">
+            <span>报修 8/31 19:52</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>王晓露</b></span>
+          </div>
+        </div>
+        <div class="when"><div class="pill wait"><div class="time">待师傅定时间</div></div></div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0044</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">嘉定万达</span> · 望丘山</div>
+          <div class="desc">滤网保养</div>
+          <div class="meta">
+            <span>报修 8/31 19:50</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>王晓露</b></span>
+          </div>
+        </div>
+        <div class="when"><div class="pill wait"><div class="time">待师傅定时间</div></div></div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0046</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">宝杨宝龙</span> · 望丘山</div>
+          <div class="desc">滤网，保养</div>
+          <div class="meta">
+            <span>报修 8/31 18:44</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>王晓露</b></span>
+          </div>
+        </div>
+        <div class="when"><div class="pill wait"><div class="time">待师傅定时间</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 待上门：师傅和时间都已确定 -->
+  <div class="group">
+    <div class="group-head">
+      <span class="marker scheduled"></span>
+      <span class="group-title">待上门</span>
+      <span class="group-count">4</span>
+    </div>
+    <div class="rows">
+      <div class="row">
+        <div class="id">KT-0043</div>
+        <div class="main">
+          <div class="title">昆山 · <span class="loc-brand">昆山金鹰</span> · 望丘山</div>
+          <div class="desc">等滤网到了安排保养，空调一直在报故障（孟总说的）</div>
+          <div class="meta">
+            <span>报修 8/31 19:49</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>朱大朋</b></span>
+          </div>
+        </div>
+        <div class="when">
+          <div class="pill urgent">
+            <div class="time">今天 21:30</div>
+            <div class="label">最近上门</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0041</div>
+        <div class="main">
+          <div class="title">嘉兴 · <span class="loc-brand">南湖天地</span> · DRUNK BAKER</div>
+          <div class="desc">前厅2台空调需要清洗，后厨脏的话一起清洗，不需要施工证</div>
+          <div class="meta">
+            <span>报修 8/31 17:17</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>大谷</b></span>
+          </div>
+        </div>
+        <div class="when">
+          <div class="pill urgent">
+            <div class="time">今天 21:00</div>
+            <div class="label">最近上门</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0047</div>
+        <div class="main">
+          <div class="title">苏州 · <span class="loc-brand">相城龙湖天街</span> · 望丘山</div>
+          <div class="desc">等滤网，保养</div>
+          <div class="meta">
+            <span>报修 8/31 19:52</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>朱大朋</b></span>
+          </div>
+        </div>
+        <div class="when">
+          <div class="pill scheduled">
+            <div class="time">9/4 21:20</div>
+            <div class="label">预计上门</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div class="id">KT-0042</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">世博天地</span> · 裕莲茶楼</div>
+          <div class="desc clamped" id="d0042">一拖一空调坏了；后厨的烘焙间有一台空调，没办法打开了，就是它的那个触摸面板一直是灰掉的，他们没办法操作</div>
+          <span class="expand" onclick="document.getElementById('d0042').classList.toggle('clamped')">展开</span>
+          <div class="meta">
+            <span>报修 8/31 19:16</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>夏正中</b></span>
+          </div>
+        </div>
+        <div class="when">
+          <div class="pill scheduled">
+            <div class="time">9/6 21:13</div>
+            <div class="label">预计上门</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 维修中：师傅已到场，正在处理 -->
+  <div class="group progress">
+    <div class="group-head">
+      <span class="marker progress"></span>
+      <span class="group-title">维修中</span>
+      <span class="group-count">1</span>
+    </div>
+    <div class="rows">
+      <div class="row progress-row">
+        <div class="id">KT-0037</div>
+        <div class="main">
+          <div class="title">上海 · <span class="loc-brand">静安嘉里</span> · 望丘山</div>
+          <div class="desc">更换压缩机，师傅已到场，预计1小时完成</div>
+          <div class="meta">
+            <span>上门时间 今天 18:40</span>
+            <span>甲方 <b>孟董</b></span>
+            <span>师傅 <b>夏正中</b></span>
+          </div>
+        </div>
+        <div class="when">
+          <span class="progress-tag"><span class="progress-dot-live"></span>处理中</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- 已完成/已取消 折叠 -->
+  <div class="group closed">
+    <div class="group-head" onclick="document.getElementById('closedBody').classList.toggle('open'); document.getElementById('closedArrow').textContent = document.getElementById('closedBody').classList.contains('open') ? '收起 ▲' : '展开 ▼'">
+      <span class="marker closed"></span>
+      <span class="group-title">已完成 / 已取消</span>
+      <span class="group-count">2</span>
+      <span class="toggle-closed" id="closedArrow" style="margin-left:auto;">展开 ▼</span>
+    </div>
+    <div class="closed-body" id="closedBody">
+      <div class="rows">
+        <div class="row">
+          <div class="id">KT-0039</div>
+          <div class="main">
+            <div class="title">— 已完成工单</div>
+            <div class="meta"><span>甲方 <b>孟董</b></span></div>
+          </div>
+          <div class="when"><span class="badge done">已完成</span></div>
+        </div>
+        <div class="row">
+          <div class="id">KT-0040</div>
+          <div class="main">
+            <div class="title">南京 · <span class="loc-brand">金陵中环</span> · DRUNK BAKER</div>
+            <div class="desc">清洗</div>
+            <div class="meta">
+              <span>报修 8/31 17:01</span>
+              <span>甲方 <b>孟董</b></span>
+              <span>师傅 <b>未指派</b></span>
+            </div>
+          </div>
+          <div class="when"><span class="badge cancel">已取消</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note">
+    改动说明：完整还原状态链，共 6 个阶段——待核实（需人工判断，警示黄）→ 待派工（核实通过、缺师傅，紫色，带"指派师傅"按钮）→ 已指派师傅·时间待定（灰色弱化，因为只是被动等待）→ 待上门（师傅+时间都确定，其中最近上门的用橙色标出）→ 维修中（师傅在场处理，蓝色+呼吸动效表示"活跃"）→ 已完成/已取消（默认折叠）。颜色只在"需要人主动做点什么"或"最紧急"的阶段出现，纯等待类状态统一弱化。
+  </div>
+
+</div>
+<script>
+function markVerified(rowId, btn){
+  const row = document.getElementById(rowId);
+  row.style.background = '#fff';
+  btn.textContent = '已派单';
+  btn.classList.add('done');
+  btn.disabled = true;
+  btn.style.cursor = 'default';
+  const hint = row.querySelector('.verify-hint');
+  if(hint){ hint.textContent = '已流转至「待派工」'; hint.style.color = '#2F7A4F'; }
+}
+function markDispatched(rowId, btn){
+  const row = document.getElementById(rowId);
+  row.style.background = '#fff';
+  btn.textContent = '已指派';
+  btn.classList.add('done');
+  btn.disabled = true;
+  btn.style.cursor = 'default';
+  const hint = row.querySelector('.dispatch-hint');
+  if(hint){ hint.textContent = '已流转至「已指派师傅·时间待定」'; hint.style.color = '#2F7A4F'; }
+}
+</script>
+</body>
+</html>

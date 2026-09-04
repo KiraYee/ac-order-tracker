@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState, useMemo } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
   Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle, Pencil,
@@ -29,10 +30,16 @@ function FinanceView({ userEmail }) {
   const [showNewAdvance, setShowNewAdvance] = useState(false);
   const [editingAdvance, setEditingAdvance] = useState(null);
   const [financeFilters, setFinanceFilters] = useState({ range: "all", start: "", end: "", storeId: "", followerId: "", technicianId: "", employeeName: "" });
+  const searchParams = useSearchParams();
 
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    const requestedTab = searchParams.get("tab");
+    if (["receivable", "payable", "advances", "all"].includes(requestedTab)) setTab(requestedTab);
+  }, [searchParams]);
 
   async function load() {
     setLoading(true);

@@ -10,9 +10,10 @@ import { pinyin } from "pinyin-pro";
 import * as XLSX from "xlsx";
 import { useSearchParams } from "next/navigation";
 import AppShell from "../components/AppShell";
+import WorkOrderCard from "../components/WorkOrderCard";
 import OrderTimeoutNotice from "../components/OrderTimeoutNotice";
 import {
-  STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince,
+  STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince, WORKLIST_GROUPS, getWorklistGroup,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
   itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
@@ -371,6 +372,7 @@ function OrdersView({ userEmail }) {
   const [draftMonth, setDraftMonth] = useState("");
   const [visitFormMode, setVisitFormMode] = useState(null);
   const [now, setNow] = useState(() => Date.now());
+  const [closedOpen, setClosedOpen] = useState(false);
   const searchParams = useSearchParams();
 
   function clearTimeFilter() {
@@ -645,6 +647,7 @@ function OrdersView({ userEmail }) {
           status: data.status || "待核实",
           pending_assignment_at: data.status === "待派工" ? new Date().toISOString() : null,
           pending_visit_at: data.status === "待上门" ? new Date().toISOString() : null,
+          in_progress_at: data.status === "维修中" ? new Date().toISOString() : null,
           completed_at: data.status === "已完成" ? new Date().toISOString() : null,
           created_by: userEmail,
           related_order_id: data.relatedOrderId || null,
@@ -698,6 +701,11 @@ function OrdersView({ userEmail }) {
       patch.pendingVisitAt = now;
     } else if (status !== "待上门") {
       patch.pendingVisitAt = null;
+    }
+    if (status === "维修中" && order?.status !== "维修中") {
+      patch.inProgressAt = now;
+    } else if (status !== "维修中") {
+      patch.inProgressAt = null;
     }
     if (status === "已完成" && !order?.completedAt) {
       patch.completedAt = new Date().toISOString();
@@ -758,14 +766,17 @@ function OrdersView({ userEmail }) {
       if (visit.resultType === "resolved") nextStatus = "已完成";
       else if (nextStatus !== "已取消") nextStatus = "维修中";
 
+      const completionUpdatedAt = new Date().toISOString();
       const completionPatch = {
         status: nextStatus,
-        updated_at: new Date().toISOString(),
+        updated_at: completionUpdatedAt,
       };
       if (nextStatus === "待派工" && order?.status !== "待派工") completionPatch.pending_assignment_at = completionPatch.updated_at;
       if (nextStatus !== "待派工") completionPatch.pending_assignment_at = null;
       if (nextStatus === "待上门" && order?.status !== "待上门") completionPatch.pending_visit_at = completionPatch.updated_at;
       if (nextStatus !== "待上门") completionPatch.pending_visit_at = null;
+      if (nextStatus === "维修中" && order?.status !== "维修中") completionPatch.in_progress_at = completionPatch.updated_at;
+      if (nextStatus !== "维修中") completionPatch.in_progress_at = null;
       if (nextStatus === "已完成" && !order?.completedAt) {
         completionPatch.completed_at = new Date().toISOString();
       }
@@ -778,6 +789,7 @@ function OrdersView({ userEmail }) {
             ? {
                 ...o,
                 status: nextStatus,
+                inProgressAt: completionPatch.in_progress_at,
                 completedAt: nextStatus === "已完成" && !o.completedAt ? completionPatch.completed_at : o.completedAt,
                 updatedAt: completionPatch.updated_at,
                 visits: [...o.visits, newVisit],
@@ -885,32 +897,12 @@ function OrdersView({ userEmail }) {
     });
   }, [orders, statusFilter, followerFilter, search, exportTimeType, exportRangeType, exportStartDate, exportEndDate, exportMonth]);
 
-  const groupedOrders = useMemo(() => {
-    const groups = new Map();
-    filtered.forEach((order) => {
-      const date = order.reportTime ? new Date(order.reportTime) : null;
-      const key = date && !Number.isNaN(date.getTime())
-        ? `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
-        : "missing";
-      if (!groups.has(key)) {
-        groups.set(key, {
-          key,
-          title: date && !Number.isNaN(date.getTime())
-            ? `${date.getMonth() + 1}月${date.getDate()}日`
-            : "未填写报修时间",
-          orders: [],
-          timestamp: date && !Number.isNaN(date.getTime()) ? date.getTime() : null,
-        });
-      }
-      groups.get(key).orders.push(order);
-    });
-    return Array.from(groups.values()).sort((a, b) => {
-      if (a.timestamp === null && b.timestamp === null) return 0;
-      if (a.timestamp === null) return 1;
-      if (b.timestamp === null) return -1;
-      return b.timestamp - a.timestamp;
-    });
-  }, [filtered]);
+  const groupedOrders = useMemo(() => WORKLIST_GROUPS.map((group) => ({
+    ...group,
+    orders: filtered
+      .filter((order) => getWorklistGroup(order)?.key === group.key)
+      .sort((a, b) => new Date(b.reportTime || 0) - new Date(a.reportTime || 0)),
+  })).filter((group) => group.orders.length > 0), [filtered]);
 
   const counts = useMemo(() => {
     const c = { all: orders.length };
@@ -1116,13 +1108,24 @@ function OrdersView({ userEmail }) {
       ) : (
         <div style={styles.groupList}>
           {groupedOrders.map((group) => (
-            <section key={group.key} style={styles.dateGroup}>
-              <div style={styles.dateGroupHeader}>{group.title}</div>
-              <div style={styles.grid}>
-                {group.orders.map((o) => (
-                  <OrderCard key={o.id} order={o} technicians={technicians} clients={clients} now={now} onClick={() => setSelectedId(o.id)} />
-                ))}
-              </div>
+            <section key={group.key} style={styles.statusGroup}>
+              <button type="button" style={styles.statusGroupHeader} onClick={() => group.key === "closed" && setClosedOpen((value) => !value)}>
+                <span style={{ ...styles.groupMarker, background: group.key === "verify" ? "#C99A1D" : group.key === "dispatch" ? "#7A63B8" : group.key === "progress" ? "#2B84D9" : group.key === "closed" ? "#9AA6AD" : group.key === "wait" ? "#B7BEC2" : "#1B6E76" }} />
+                <span>{group.title}</span><span style={styles.groupCount}>{group.orders.length}</span>
+                {group.key === "closed" ? <span style={styles.groupToggle}>{closedOpen ? "收起 ▲" : "展开 ▼"}</span> : null}
+              </button>
+              {group.key !== "closed" || closedOpen ? <div style={styles.statusRows}>
+                {group.orders.map((o) => <WorkOrderCard
+                  key={o.id}
+                  order={o}
+                  technicians={technicians}
+                  clients={clients}
+                  now={now}
+                  groupKey={group.key}
+                  onClick={() => setSelectedId(o.id)}
+                  onAction={group.key === "verify" ? () => updateStatus(o.id, "待派工") : group.key === "wait" ? () => setSelectedId(o.id) : undefined}
+                />)}
+              </div> : null}
             </section>
           ))}
         </div>
@@ -2645,6 +2648,12 @@ const styles = {
   filterSelect: { border: "1px solid #E2E9E8", borderRadius: 7, background: "#F4F7F6", color: "#4C6169", padding: "6px 8px", fontSize: 12 },
   centerState: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "60px 0" },
   groupList: { display: "flex", flexDirection: "column", gap: 18, paddingBottom: 32 },
+  statusGroup: { display: "flex", flexDirection: "column", gap: 10 },
+  statusGroupHeader: { display: "flex", alignItems: "center", gap: 8, width: "100%", border: 0, background: "transparent", padding: "0 2px", color: "#14212B", fontSize: 13.5, fontWeight: 600, textAlign: "left", cursor: "pointer" },
+  groupMarker: { width: 7, height: 7, borderRadius: "50%", flexShrink: 0 },
+  groupCount: { color: "#9AA6AD", fontSize: 12.5, fontWeight: 500 },
+  groupToggle: { marginLeft: "auto", color: "#9AA6AD", fontSize: 11.5, fontWeight: 500 },
+  statusRows: { display: "flex", flexDirection: "column", gap: 8 },
   dateGroup: { background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 10, overflow: "hidden" },
   dateGroupHeader: { padding: "10px 14px", borderBottom: "1px solid #E2E9E8", background: "#fff", color: "#145560", fontSize: 14, fontWeight: 700 },
   grid: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12, paddingBottom: 32 },
