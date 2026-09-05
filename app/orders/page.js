@@ -17,7 +17,7 @@ import {
   getOrderExceptions,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
+  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
   ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
@@ -123,7 +123,6 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   const storeById = new Map(stores.map((store) => [store.id, store]));
   const exportOrders = orders;
   const summary = exportOrders.map((order) => {
-    const tech = techById.get(order.assignedTechnicianId);
     const store = order.store || storeById.get(order.storeId);
     const storeName = store?.store_name || [order.city, order.mall].filter(Boolean).join("") || "";
     const quoteItems = orderQuoteItems(order);
@@ -135,6 +134,11 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
     }
     const technicianFeeRecords = Array.from(expenseRecords.values()).filter((record) => record.type === "technician_fee");
     const technicianQuoteTotal = technicianFeeRecords.reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const visitTechnicianNames = [];
+    for (const visit of order.visits || []) {
+      const name = techById.get(visit.technicianId)?.name || (visit.master || "").trim();
+      if (name && !visitTechnicianNames.includes(name)) visitTechnicianNames.push(name);
+    }
     const insuranceFeeTotal = Array.from(expenseRecords.values())
       .filter((record) => record.type === "insurance")
       .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
@@ -150,7 +154,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
       "故障描述": order.issueDesc || "",
       "备注": order.notes || "",
       "跟单人": employeeById.get(order.followerId) || "",
-      "指派师傅": tech?.name || "",
+      "指派师傅": visitTechnicianNames.join("、"),
       "当前状态": order.status || "",
       "验收资料是否齐全": order.inspectionPhotoUrl?.trim() || order.comparePhotoUrl?.trim() ? "是" : "否",
       "师傅报价总额": technicianQuoteTotal,
@@ -178,12 +182,38 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
       });
     });
   });
+  const technicianDetails = [];
+  exportOrders.forEach((order) => {
+    const visitById = new Map((order.visits || []).map((visit, index) => [visit.id, { visit, number: index + 1 }]));
+    const records = new Map();
+    for (const record of order.expenseRecords || []) records.set(record.id, record);
+    for (const visit of order.visits || []) {
+      for (const record of visit.expenseRecords || []) records.set(record.id, record);
+    }
+    for (const record of records.values()) {
+      if (record.type !== "technician_fee") continue;
+      const visitInfo = visitById.get(record.visitId);
+      const visit = visitInfo?.visit;
+      const technicianName = techById.get(record.technicianId)?.name || (visit?.master || "").trim();
+      technicianDetails.push({
+        "工单号": order.ticketNo || "",
+        "第几次上门": visitInfo ? `第${visitInfo.number}次` : "订单级",
+        "上门师傅": technicianName,
+        "上门日期": excelDate(visit?.visitTime),
+        "本次支出金额": Number(record.amount) || 0,
+        "是否结算": record.isSettled === true ? "是" : "否",
+      });
+    }
+  });
   const workbook = XLSX.utils.book_new();
   const summarySheet = XLSX.utils.json_to_sheet(summary);
   const detailSheet = XLSX.utils.json_to_sheet(details);
+  const technicianDetailSheet = XLSX.utils.json_to_sheet(technicianDetails);
   formatExcelDates(summarySheet, ["报修时间", "完成时间", "创建时间"]);
+  formatExcelDates(technicianDetailSheet, ["上门日期"]);
   XLSX.utils.book_append_sheet(workbook, summarySheet, "工单总表");
   XLSX.utils.book_append_sheet(workbook, detailSheet, "报价明细");
+  XLSX.utils.book_append_sheet(workbook, technicianDetailSheet, "师傅费用明细");
   const date = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(workbook, `工单导出${filteredOnly ? "_当前筛选" : ""}_${date}.xlsx`);
 }
@@ -1224,7 +1254,7 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
   const lastVisit = order.visits[order.visits.length - 1];
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const client = clients.find((c) => c.id === order.clientId);
-  const technicianCost = orderTechnicianCostTotal(order);
+  const technicianFees = orderTechnicianFeeBreakdown(order, technicians);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -1251,13 +1281,14 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
           </span>
         )}
       </div>
-      {(tech || client || technicianCost > 0 || !order.assignedTechnicianId) && (
+      {(tech || client || technicianFees.length > 0 || !order.assignedTechnicianId) && (
         <div style={styles.cardMetaRow}>
           {client && <span style={styles.cardMeta}>甲方：{client.name}</span>}
-          <span style={{ ...styles.cardMeta, ...(technicianCost > 0 ? { color: order.technicianSettled ? "#2C6B45" : "#A5661A" } : {}) }}>
-            <Users size={12} /> {tech ? `指派：${tech.name}` : "师傅：未指派"}
-            {technicianCost > 0 ? ` - ${order.technicianSettled ? "已结算" : `¥${technicianCost}`}` : ""}
-          </span>
+          {technicianFees.length > 0 ? technicianFees.map((fee) => (
+            <span key={fee.name} style={{ ...styles.cardMeta, color: technicianFeeStatusColor(fee) }}>
+              <Users size={12} /> {fee.name} ¥{fee.amount} {fee.settled ? "已结算" : "未结算"}
+            </span>
+          )) : <span style={styles.cardMeta}><Users size={12} /> {tech ? `当前负责：${tech.name}` : "师傅：未指派"}</span>}
         </div>
       )}
       {lastVisit && (
@@ -2147,6 +2178,7 @@ const EXPENSE_TYPE_STYLES = {
 function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(() => emptyExpenseRecord());
+  const [saveError, setSaveError] = useState("");
 
   function emptyExpenseRecord() {
     return {
@@ -2163,11 +2195,13 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   }
 
   function beginNew() {
+    setSaveError("");
     setEditingId("new");
     setDraft(emptyExpenseRecord());
   }
 
   function beginEdit(record) {
+    setSaveError("");
     setEditingId(record.id);
     setDraft({ ...record, qty: record.qty ?? 1, unitPrice: record.unitPrice ?? "", payerName: record.payerName || "", notes: record.notes || "" });
   }
@@ -2198,12 +2232,16 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
     save.then((saved) => {
       onChange(editingId === "new" ? [...records, saved] : records.map((record) => (record.id === editingId ? saved : record)));
       setEditingId(null);
-    }).catch(() => {});
+    }).catch((error) => {
+      setSaveError(`保存费用失败：${error.message || "无法保存费用或同步垫付记录"}`);
+    });
   }
 
   function removeRecord(id) {
     if (visitId || orderId) {
-      onDeleteExpense(id).then(() => onChange(records.filter((record) => record.id !== id))).catch(() => {});
+      onDeleteExpense(id).then(() => onChange(records.filter((record) => record.id !== id))).catch((error) => {
+        setSaveError(`删除费用失败：${error.message || "未知错误"}`);
+      });
     } else {
       onChange(records.filter((record) => record.id !== id));
     }
@@ -2216,6 +2254,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
 
   return (
     <Field label={fixedType === "insurance" ? "保险费用" : "本次支出"}>
+      {saveError && <div style={styles.expenseError}>{saveError}</div>}
       {records.length > 0 && (
         <div style={styles.expenseList}>
           {records.map((record) => (
@@ -2227,7 +2266,11 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
                 <strong>{record.label}</strong>
                 <span>{record.qty} × ¥{record.unitPrice} = ¥{record.amount}</span>
                 <span>{record.paymentMethod === "advance" ? `员工垫付：${record.payerName || "未填写"}` : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
-                <span style={record.isSettled ? styles.expenseSettled : styles.expenseUnsettled}>
+                <span style={record.isSettled
+                  ? styles.expenseSettled
+                  : record.paymentMethod === "advance"
+                    ? styles.expenseAdvanceUnsettled
+                    : styles.expenseMonthlyUnsettled}>
                   {record.isSettled ? `已结清${record.settledAt ? ` · ${fmtDate(record.settledAt)}` : ""}` : "未结清"}
                 </span>
                 {record.notes && <span style={styles.expenseNote}>{record.notes}</span>}
@@ -2583,7 +2626,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
           <Field label="故障描述 *">
             <textarea style={{ ...styles.input, minHeight: 70, resize: "vertical" }} value={issueDesc} onChange={(e) => setIssueDesc(e.target.value)} />
           </Field>
-          <Field label="指派师傅">
+          <Field label="当前负责师傅">
             <TechnicianPicker
               technicians={technicians}
               valueId={assignedTechnicianId}
@@ -2749,7 +2792,9 @@ const styles = {
   expenseType: { borderRadius: 12, padding: "2px 6px", fontSize: 10.5, fontWeight: 700 },
   expenseActions: { display: "flex", flexShrink: 0, gap: 2 },
   expenseSettled: { color: "#2C6B45", fontWeight: 700 },
-  expenseUnsettled: { color: "#A5661A", background: "#FBEEDD", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
+  expenseAdvanceUnsettled: { color: "#B5450C", background: "#FBEDE4", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
+  expenseMonthlyUnsettled: { color: "#718087", background: "#F4F7F6", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
+  expenseError: { color: "#B5450C", background: "#FBEDE4", border: "1px solid #D9631F66", borderRadius: 6, padding: "7px 9px", marginBottom: 8, fontSize: 12, fontWeight: 600 },
   expenseNote: { color: "#8FA1A8" },
   expenseEditor: { display: "flex", flexDirection: "column", gap: 8, background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 8 },
   expenseFormGrid: { display: "grid", gridTemplateColumns: "1fr 1.4fr .65fr .8fr auto", gap: 6, alignItems: "center" },

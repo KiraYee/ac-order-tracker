@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { FileText, GitBranch, Wallet } from "lucide-react";
+import { FileText, GitBranch, TrendingUp, Wallet } from "lucide-react";
 
 const ITEMS = [
   { key: "receivable", Icon: Wallet, label: "应收甲方", href: "/finance?tab=receivable" },
   { key: "payable", Icon: GitBranch, label: "未支付师傅款", href: "/finance?tab=payable" },
   { key: "advances", Icon: FileText, label: "待报销", href: "/finance?tab=advances" },
+  { key: "profit", Icon: TrendingUp, label: "利润", href: "/finance" },
 ];
 
 export default function OverviewFinanceSummary({ summary }) {
@@ -14,6 +15,7 @@ export default function OverviewFinanceSummary({ summary }) {
     receivable: { amount: summary.receivableTotal, detail: `${summary.receivableCount} 单未结算` },
     payable: { amount: summary.technicianUnpaidTotal, detail: "待支付" },
     advances: { amount: summary.pendingAdvanceTotal, detail: `${summary.pendingAdvanceCount} 笔` },
+    profit: { amount: summary.profitTotal, detail: "全部订单" },
   };
 
   return (

@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
+import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal, orderTechnicianUnpaidCostTotal, orderTechnicianFeeRecords, technicianFeeStatusColor } from "../../lib/dataHelpers";
 
 export default function FinancePage() {
   return (
@@ -74,19 +74,17 @@ function FinanceView({ userEmail }) {
     }
   }
 
-  async function toggleTechnicianSettled(order) {
-    const next = !order.technicianSettled;
+  async function toggleTechnicianSettled(item) {
+    const next = item.record.isSettled !== true;
     if (!next && !window.confirm("师傅费用已结算，确认撤销结算吗？")) return;
     try {
+      const settledAt = next ? new Date().toISOString() : null;
       const { error } = await supabase
-        .from("orders")
-        .update({
-          technician_settled: next,
-          technician_settled_at: next ? new Date().toISOString() : null,
-        })
-        .eq("id", order.id);
+        .from("expense_records")
+        .update({ is_settled: next, settled_at: settledAt, updated_at: new Date().toISOString() })
+        .eq("id", item.record.id);
       if (error) throw error;
-      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, technicianSettled: next } : o)));
+      await load();
     } catch (e) {
       setErrorMsg("更新失败：" + (e.message || "未知错误"));
     }
@@ -96,11 +94,16 @@ function FinanceView({ userEmail }) {
     const now = new Date().toISOString();
     const results = await Promise.all(items.map(async (item) => {
       try {
+        if (kind === "technician") {
+          const { error } = await supabase
+            .from("expense_records")
+            .update({ is_settled: true, settled_at: now, updated_at: new Date().toISOString() })
+            .eq("id", item.record.id);
+          return { error };
+        }
         const update = kind === "client"
           ? { client_settled: true, client_settled_at: now }
-          : kind === "technician"
-            ? { technician_settled: true, technician_settled_at: now }
-            : { reimbursed: true, reimbursed_at: now };
+          : { reimbursed: true, reimbursed_at: now };
         const table = kind === "advance" ? "advances" : "orders";
         const { error } = await supabase.from(table).update(update).eq("id", item.id);
         return { error };
@@ -169,33 +172,34 @@ function FinanceView({ userEmail }) {
     () => orders.filter((o) => orderChargeTotal(o) > 0),
     [orders]
   );
-  const receivableTotal = receivables.reduce((s, o) => s + orderChargeTotal(o), 0);
+  const pendingReceivables = receivables.filter((o) => !o.clientSettled);
+  const receivableTotal = pendingReceivables.reduce((s, o) => s + orderChargeTotal(o), 0);
 
   // 应付师傅：只统计 expense_records.type=technician_fee，不包含保险费等其他成本
   const technicianPayableTotal = orders.reduce((sum, order) => sum + orderTechnicianCostTotal(order), 0);
   const technicianUnpaidTotal = orders.reduce(
-    (sum, order) => sum + (!order.technicianSettled ? orderTechnicianCostTotal(order) : 0),
+    (sum, order) => sum + orderTechnicianUnpaidCostTotal(order),
     0
   );
   const technicianPaidTotal = technicianPayableTotal - technicianUnpaidTotal;
   const payables = useMemo(() => {
-    return orders
-      .filter((o) => orderTechnicianCostTotal(o) > 0)
-      .map((o) => {
-        const tech = technicians.find((t) => t.id === o.assignedTechnicianId);
-        return { order: o, cost: orderTechnicianCostTotal(o), techName: tech?.name || "未指派师傅" };
-      })
-      .sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
+    return orders.flatMap((order) => orderTechnicianFeeRecords(order, technicians).map((record) => ({
+      order,
+      record,
+      id: record.id,
+      amount: Number(record.amount) || 0,
+      unpaidCost: record.isSettled === false ? Number(record.amount) || 0 : 0,
+      techName: record.technicianName,
+    }))).sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
   }, [orders, technicians]);
-  const payableTotal = payables.reduce((s, p) => s + p.cost, 0);
+  const payableTotal = payables.reduce((s, p) => s + p.unpaidCost, 0);
 
   // 垫付待报销
   const pendingAdvances = advances.filter((a) => !a.reimbursed);
   const pendingAdvanceTotal = pendingAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const completedReceivables = receivables.filter((o) => o.clientSettled);
-  const pendingReceivables = receivables.filter((o) => !o.clientSettled);
-  const completedPayables = payables.filter((p) => p.order.technicianSettled);
-  const pendingPayables = payables.filter((p) => !p.order.technicianSettled);
+  const completedPayables = payables.filter((p) => p.record.isSettled === true);
+  const pendingPayables = payables.filter((p) => p.record.isSettled === false);
   const completedAdvances = advances.filter((a) => a.reimbursed);
 
   if (loading) {
@@ -234,7 +238,7 @@ function FinanceView({ userEmail }) {
         </div>
         <div style={{ ...styles.statCard, borderColor: "#A5661A40" }}>
           <div style={styles.statNum}>¥{technicianUnpaidTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>未支付师傅款（{payables.length} 单）</div>
+        <div style={styles.statLabel}>未支付师傅款（{pendingPayables.length} 笔）</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#3E8F6340" }}>
           <div style={styles.statNum}>¥{technicianPaidTotal.toLocaleString()}</div>
@@ -263,7 +267,7 @@ function FinanceView({ userEmail }) {
 
       {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
 
-      {tab === "payable" && <FinanceFilteredGroups kind="technician" pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.order.id} order={p.order} kind="technician" amount={p.cost} settled={p.order.technicianSettled} settledAt={p.order.technicianSettledAt} suffix={p.techName} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p.order)} />} />}
+      {tab === "payable" && <FinanceFilteredGroups kind="technician" pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.record.id} order={p.order} kind="technician" amount={p.amount} settled={p.record.isSettled === true} settledAt={p.record.settledAt} suffix={`${p.techName}${p.record.visitNumber ? ` · 第${p.record.visitNumber}次上门` : ""}`} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
 
       {tab === "advances" && (
         <div>
@@ -292,7 +296,7 @@ function FinanceView({ userEmail }) {
             render={(entry, options) => entry.kind === "client"
             ? <FinanceOrderRow key={`client-${entry.item.id}`} order={entry.item} kind="client" amount={orderChargeTotal(entry.item)} settled={entry.item.clientSettled} settledAt={entry.item.clientSettledAt} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(entry.item)} />
             : entry.kind === "technician"
-              ? <FinanceOrderRow key={`technician-${entry.item.order.id}`} order={entry.item.order} kind="technician" amount={entry.item.cost} settled={entry.item.order.technicianSettled} settledAt={entry.item.order.technicianSettledAt} suffix={entry.item.techName} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(entry.item.order)} />
+              ? <FinanceOrderRow key={`technician-${entry.item.record.id}`} order={entry.item.order} kind="technician" amount={entry.item.amount} settled={entry.item.record.isSettled === true} settledAt={entry.item.record.settledAt} statusFee={{ ...entry.item.record, settled: entry.item.record.isSettled === true }} suffix={`${entry.item.techName}${entry.item.record.visitNumber ? ` · 第${entry.item.record.visitNumber}次上门` : ""}`} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(entry.item)} />
               : <FinanceAdvanceRow key={`advance-${entry.item.id}`} advance={entry.item} orders={orders} showTypeTag showSettlementDate={options.showSettlementDate} onEdit={() => setEditingAdvance(entry.item)} onToggle={() => toggleReimbursed(entry.item)} />}
         />
       )}
@@ -321,7 +325,11 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
   const [selectedIds, setSelectedIds] = useState([]);
 
   const orderForItem = (item) => kind === "advance" ? orders.find((order) => order.id === item.order_id) : kind === "technician" ? item.order : item;
-  const amountForItem = (item) => kind === "advance" ? Number(item.amount) || 0 : kind === "technician" ? Number(item.cost) || 0 : orderChargeTotal(item);
+  const amountForItem = (item) => kind === "advance"
+    ? Number(item.amount) || 0
+    : kind === "technician"
+      ? Number(item.amount) || 0
+      : orderChargeTotal(item);
   const dateForItem = (item) => kind === "advance" ? item.created_at : kind === "technician" ? item.order.createdAt : item.createdAt;
   const matchesFilters = (item) => {
     const order = orderForItem(item);
@@ -336,7 +344,7 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
     if (end && date > end) return false;
     if (filters.storeId && order?.storeId !== filters.storeId) return false;
     if (filters.followerId && order?.followerId !== filters.followerId) return false;
-    if (kind === "technician" && filters.technicianId && order?.assignedTechnicianId !== filters.technicianId) return false;
+    if (kind === "technician" && filters.technicianId && item.technicianId !== filters.technicianId) return false;
     if (kind === "advance" && filters.employeeName && item.employee_name !== filters.employeeName) return false;
     return true;
   };
@@ -352,13 +360,13 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
   }
 
   async function handleBatch() {
-    const action = kind === "client" ? "标记已结算" : kind === "technician" ? "标记已付款" : "标记已报销";
+    const action = kind === "client" ? "标记已结算" : kind === "technician" ? "标记已结算" : "标记已报销";
     const names = kind === "advance"
       ? [...new Set(selected.map((item) => item.employee_name).filter(Boolean))].join("、")
       : "";
     const summary = `即将${action} ${selected.length} 条记录，合计 ¥${selectedTotal.toLocaleString()}${names ? `，垫付人：${names}` : ""}`;
     if (!window.confirm(summary)) return;
-    const result = await onBatchSettle(selected.map((item) => kind === "technician" ? item.order : item), kind);
+    const result = await onBatchSettle(selected, kind);
     if (!result.failed) resetSelection();
   }
 
@@ -372,10 +380,13 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
         跟单人: employees.find((employee) => employee.id === order?.followerId)?.name || "",
         金额: amountForItem(item),
         登记时间: dateForItem(item),
-        [kind === "advance" ? "报销时间" : "结算时间"]: kind === "advance" ? item.reimbursed_at || "" : (kind === "client" ? order?.clientSettledAt : order?.technicianSettledAt) || "",
+        [kind === "advance" ? "报销时间" : "结算时间"]: kind === "advance" ? item.reimbursed_at || "" : (kind === "client" ? order?.clientSettledAt : item.record?.settledAt) || "",
       };
       if (kind === "advance") row.垫付人 = item.employee_name || "";
-      if (kind === "technician") row.师傅 = technicians.find((tech) => tech.id === order?.assignedTechnicianId)?.name || "";
+      if (kind === "technician") {
+        row.师傅 = item.technicianName || "";
+        row.上门次数 = item.visitNumber ? `第${item.visitNumber}次` : "订单级";
+      }
       return row;
     });
     const sheet = XLSX.utils.json_to_sheet(rows);
@@ -390,7 +401,7 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
       ? item.reimbursed_at
       : kind === "client"
         ? order?.clientSettledAt
-        : order?.technicianSettledAt;
+        : item.record?.settledAt;
     const settledLabel = kind === "advance" ? "已报销" : "已结算";
     return `${order?.ticketNo || "垫付"} · ¥${amountForItem(item).toLocaleString()} · ${settledLabel}${settledAt ? ` ${fmtDateShort(settledAt)}` : ""}`;
   }
@@ -408,7 +419,7 @@ function FinanceFilteredGroups({ kind, pending, completed, orders, stores, techn
       <div style={styles.groupTitle}>待处理（{filteredPending.length}）</div>
       <label style={styles.selectAllRow}><input type="checkbox" checked={allSelected} onChange={(e) => setSelectedIds(e.target.checked ? filteredPending.map((item) => item.id) : [])} /> 全选当前筛选结果</label>
       {filteredPending.length > 0 ? <div style={styles.list}>{filteredPending.map((item) => <div key={item.id} style={styles.batchRow}><input type="checkbox" checked={selectedIds.includes(item.id)} onChange={(e) => setSelectedIds((current) => e.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />{render(item, { showSettlementDate: false })}</div>)}</div> : <EmptyState text="没有符合筛选条件的待处理记录" />}
-      {selected.length > 0 && <div style={styles.batchBar}>已选 {selected.length} 条，合计 ¥{selectedTotal.toLocaleString()} <button style={styles.primaryBtn} onClick={handleBatch}>{kind === "client" ? "批量标记已结算" : kind === "technician" ? "批量标记已付款" : "批量标记已报销"}</button></div>}
+       {selected.length > 0 && <div style={styles.batchBar}>已选 {selected.length} 条，合计 ¥{selectedTotal.toLocaleString()} <button style={styles.primaryBtn} onClick={handleBatch}>{kind === "client" ? "批量标记已结算" : kind === "technician" ? "批量标记已结算" : "批量标记已报销"}</button></div>}
       <div style={styles.completedHeader}><div><div style={styles.groupTitle}>已完成（{completed.length}） · 合计 ¥{completed.reduce((sum, item) => sum + amountForItem(item), 0).toLocaleString()}</div><div style={styles.completedPreview}>最近3条预览：{completed.slice(0, 3).map((item) => <div key={item.id}>{previewText(item)}</div>)}</div></div><div style={styles.completedActions}><button style={styles.ghostBtn} onClick={() => setCompletedOpen((open) => !open)}>{completedOpen ? "收起" : "展开查看全部"}</button><button style={styles.ghostBtn} onClick={exportCompleted}>导出已完成记录</button></div></div>
       {completedOpen && <div style={styles.list}>{completed.map((item) => render(item, { showSettlementDate: true }))}</div>}
     </div>
@@ -426,8 +437,9 @@ function FinanceSectionGroup({ pending, completed, emptyText, render }) {
   );
 }
 
-function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, showTypeTag = false, showSettlementDate = false, onSettle }) {
+function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, statusFee, showTypeTag = false, showSettlementDate = false, onSettle }) {
   const color = kind === "client" ? "#1F7A8C" : "#3E8F63";
+  const feeStatusColor = kind === "technician" ? technicianFeeStatusColor(statusFee) : color;
   const label = kind === "client" ? "客户" : "师傅";
   const storeDisplay = orderStoreDisplay(order);
   const location = storeDisplay.storeName || `${storeDisplay.city}${storeDisplay.mall}` || order.mall || "未关联门店";
@@ -441,9 +453,9 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
         {showSettlementDate && <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>}
       </Link>
       <div style={styles.rowRight}>
-        <span style={styles.amount}>¥{amount}</span>
+        <span style={{ ...styles.amount, color: feeStatusColor }}>¥{amount}</span>
         <button style={{ ...styles.settleBtn, ...(settled ? styles.settleBtnDone : {}) }} onClick={onSettle}>
-          <CheckCircle2 size={13} /> {settled ? "撤销结算" : kind === "client" ? "标记已结算" : "标记已付款"}
+          <CheckCircle2 size={13} /> {settled ? "撤销结算" : kind === "client" ? "标记已结算" : "标记已结算"}
         </button>
       </div>
     </div>
@@ -499,7 +511,6 @@ function NewAdvanceModal({ orders, initial, onClose, onSubmit, locked = false, o
   function submit() {
     if (!employeeName.trim() || !amount) {
       setErr("请填写垫付人和金额");
-      return;
     }
     onSubmit({
       employee_name: employeeName.trim(),

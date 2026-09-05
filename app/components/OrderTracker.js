@@ -7,7 +7,7 @@ import {
   Pencil, Link2, DollarSign, TrendingUp, CalendarCheck
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal } from "../../lib/dataHelpers";
+import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor } from "../../lib/dataHelpers";
 import { ticketNoFromReportTime } from "../../lib/dataHelpers";
 
 const STATUSES = ["待核实", "待派工", "待上门", "维修中", "已完成", "已取消"];
@@ -76,7 +76,7 @@ function orderFromDb(row) {
     assignedTechnicianId: row.assigned_technician_id,
     clientSettled: row.client_settled,
     technicianSettled: row.technician_settled,
-    expenseRecords: row.expense_records || [],
+    expenseRecords: (row.expense_records || []).map(expenseRecordFromDb),
     visits: (row.visits || [])
       .map(visitFromDb)
       .sort((a, b) => new Date(a.visitTime) - new Date(b.visitTime)),
@@ -92,8 +92,21 @@ function visitFromDb(row) {
     resultType: row.result_type,
     note: row.note,
     costItems: row.cost_items || [],
+    expenseRecords: (row.expense_records || []).map(expenseRecordFromDb),
     createdBy: row.created_by,
     createdAt: row.created_at,
+  };
+}
+
+function expenseRecordFromDb(row) {
+  return {
+    id: row.id,
+    visitId: row.visit_id,
+    orderId: row.order_id,
+    technicianId: row.technician_id,
+    type: row.type,
+    amount: row.amount,
+    isSettled: row.is_settled,
   };
 }
 
@@ -549,8 +562,7 @@ function OrderCard({ order, technicians, onClick }) {
   const st = STATUS_STYLE[order.status];
   const lastVisit = order.visits[order.visits.length - 1];
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
-  const cost = orderTechnicianCostTotal(order);
-  const technicianSettled = !!order.technicianSettled;
+  const technicianFees = orderTechnicianFeeBreakdown(order, technicians);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -570,7 +582,7 @@ function OrderCard({ order, technicians, onClick }) {
           <Clock size={12} /> 报修 {fmtDate(order.reportTime)}
         </span>
       </div>
-      {(tech || cost > 0 || order.clientSettled !== undefined || !order.assignedTechnicianId) && (
+      {(tech || technicianFees.length > 0 || order.clientSettled !== undefined || !order.assignedTechnicianId) && (
         <div style={styles.cardMetaRow}>
           {tech && (
             <span style={styles.cardMeta}>
@@ -578,16 +590,13 @@ function OrderCard({ order, technicians, onClick }) {
             </span>
           )}
           {!tech && <span style={styles.cardMeta}>师傅：未指派</span>}
-          {cost > 0 && (
-            <span style={{ ...styles.cardMeta, color: "#A5661A" }}>
-              {order.technicianSettled ? "已结算" : `- ¥${cost}`}
+          {technicianFees.map((fee) => (
+            <span key={fee.name} style={{ ...styles.cardMeta, color: technicianFeeStatusColor(fee) }}>
+              {fee.name} ¥{fee.amount} {fee.settled ? "已结算" : "未结算"}
             </span>
-          )}
+          ))}
           <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
             甲方{order.clientSettled ? "已结算" : "未结算"}
-          </span>
-          <span style={{ ...styles.settlementBadge, ...(technicianSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
-            师傅费用{technicianSettled ? "已结清" : "未结清"}
           </span>
         </div>
       )}
@@ -743,7 +752,7 @@ function DetailPanel({
           )}
 
           <div style={styles.statusRow}>
-            <div style={styles.sectionLabel}>指派师傅</div>
+            <div style={styles.sectionLabel}>当前负责师傅</div>
             <TechnicianPicker
               technicians={technicians}
               valueId={order.assignedTechnicianId}
