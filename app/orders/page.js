@@ -18,7 +18,7 @@ import {
   getOrderExceptions,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
+  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor, expenseSettlementMeta, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
   ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
@@ -385,6 +385,7 @@ function OrdersView({ userEmail }) {
   const [cities, setCities] = useState([]);
   const [brands, setBrands] = useState([]);
   const [stores, setStores] = useState([]);
+  const [advances, setAdvances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -447,6 +448,7 @@ function OrdersView({ userEmail }) {
     fetchVocabulary("cities", setCities);
     fetchVocabulary("brands", setBrands);
     fetchStores();
+    fetchAdvances();
   }, []);
 
   useEffect(() => {
@@ -468,6 +470,18 @@ function OrdersView({ userEmail }) {
   }, [stores]);
 
   useEffect(() => {
+    const advanceByExpenseId = new Map(advances.map((item) => [item.expense_record_id, item.reimbursed === true]));
+    setOrders((prev) => prev.map((order) => ({
+      ...order,
+      expenseRecords: (order.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+      visits: (order.visits || []).map((visit) => ({
+        ...visit,
+        expenseRecords: (visit.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+      })),
+    })));
+  }, [advances]);
+
+  useEffect(() => {
     const openId = searchParams.get("open");
     if (!openId) {
       setSelectedId(null);
@@ -485,7 +499,15 @@ function OrdersView({ userEmail }) {
         .select("*, expense_records(*), visits(*, expense_records(*))")
         .order("report_time", { ascending: false });
       if (error) throw error;
-      setOrders((data || []).map(orderFromDb));
+      const advanceByExpenseId = new Map(advances.map((item) => [item.expense_record_id, item.reimbursed === true]));
+      setOrders((data || []).map(orderFromDb).map((order) => ({
+        ...order,
+        expenseRecords: (order.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+        visits: (order.visits || []).map((visit) => ({
+          ...visit,
+          expenseRecords: (visit.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+        })),
+      })));
       setErrorMsg("");
     } catch (e) {
       setErrorMsg("加载工单失败：" + (e.message || "未知错误"));
@@ -550,6 +572,14 @@ function OrdersView({ userEmail }) {
     } catch (e) {
       // migration_v9 尚未执行时，历史工单仍使用原有文本字段。
     }
+  }
+
+  async function fetchAdvances() {
+    try {
+      const { data, error } = await supabase.from("advances").select("expense_record_id, reimbursed");
+      if (error) throw error;
+      setAdvances(data || []);
+    } catch (e) { /* 垫付表可能尚未迁移 */ }
   }
 
   async function findStore(city, brand, mall) {
@@ -2318,13 +2348,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
                 <strong>{record.label}</strong>
                 <span>{record.qty} × ¥{record.unitPrice} = ¥{record.amount}</span>
                 <span>{record.paymentMethod === "advance" ? `员工垫付：${record.payerName || "未填写"}` : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
-                <span style={record.isSettled
-                  ? styles.expenseSettled
-                  : record.paymentMethod === "advance"
-                    ? styles.expenseAdvanceUnsettled
-                    : styles.expenseMonthlyUnsettled}>
-                  {record.isSettled ? `已结清${record.settledAt ? ` · ${fmtDate(record.settledAt)}` : ""}` : "未结清"}
-                </span>
+                {(() => { const meta = expenseSettlementMeta(record); return <span style={{ color: meta.color, fontWeight: 700 }}>{meta.label}{record.isSettled && record.settledAt ? ` · ${fmtDate(record.settledAt)}` : ""}</span>; })()}
                 {record.notes && <span style={styles.expenseNote}>{record.notes}</span>}
               </div>
               <div style={styles.expenseActions}>

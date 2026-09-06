@@ -8,7 +8,7 @@ import {
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal, orderTechnicianUnpaidCostTotal, orderTechnicianFeeRecords, technicianFeeStatusColor } from "../../lib/dataHelpers";
+import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal, orderTechnicianUnpaidCostTotal, orderTechnicianFeeRecords, expenseSettlementMeta } from "../../lib/dataHelpers";
 
 export default function FinancePage() {
   return (
@@ -80,7 +80,13 @@ function FinanceView({ userEmail }) {
       supabase.from("employees").select("*").order("name"),
     ]);
     const storeById = new Map((storeRows || []).map((store) => [store.id, store]));
-    setOrders((ords || []).map(orderFromDb).map((order) => ({ ...order, store: storeById.get(order.storeId) || null })));
+    const advanceByExpenseId = new Map((advs || []).map((item) => [item.expense_record_id, item.reimbursed === true]));
+    setOrders((ords || []).map(orderFromDb).map((order) => ({
+      ...order,
+      store: storeById.get(order.storeId) || null,
+      expenseRecords: (order.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+      visits: (order.visits || []).map((visit) => ({ ...visit, expenseRecords: (visit.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })) })),
+    })));
     setTechnicians(techs || []);
     setEmployees(employeeRows || []);
     setStores(storeRows || []);
@@ -497,7 +503,7 @@ function FinanceSectionGroup({ pending, completed, emptyText, render }) {
 
 function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, statusFee, expenseRecordId, highlight = false, showTypeTag = false, showSettlementDate = false, onSettle }) {
   const color = kind === "client" ? "#1F7A8C" : "#3E8F63";
-  const feeStatusColor = kind === "technician" ? technicianFeeStatusColor(statusFee) : color;
+  const feeStatus = kind === "technician" ? expenseSettlementMeta(statusFee) : null;
   const label = kind === "client" ? "客户" : "师傅";
   const storeDisplay = orderStoreDisplay(order);
   const location = storeDisplay.storeName || `${storeDisplay.city}${storeDisplay.mall}` || order.mall || "未关联门店";
@@ -511,7 +517,7 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
         {showSettlementDate && <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>}
       </Link>
       <div style={styles.rowRight}>
-        <span style={{ ...styles.amount, color: feeStatusColor }}>¥{amount}</span>
+        <span style={{ ...styles.amount, color: feeStatus?.color || color }}>¥{amount}{feeStatus ? ` ${feeStatus.label}` : ""}</span>
         <button style={{ ...styles.settleBtn, ...(settled ? styles.settleBtnDone : {}) }} onClick={onSettle}>
           <CheckCircle2 size={13} /> {settled ? "撤销结算" : kind === "client" ? "标记已结算" : "标记已结算"}
         </button>

@@ -1,7 +1,7 @@
 "use client";
 
 import { Clock, Users } from "lucide-react";
-import { STATUS_STYLE, fmtDate, orderStoreDisplay, orderTechnicianFeeBreakdown, technicianFeeStatusColor } from "../../lib/dataHelpers";
+import { STATUS_STYLE, fmtDate, orderChargeTotal, orderStoreDisplay, orderTechnicianFeeBreakdown, expenseSettlementMeta } from "../../lib/dataHelpers";
 import OrderTimeoutNotice from "./OrderTimeoutNotice";
 
 function isUrgentVisit(order, now = Date.now()) {
@@ -37,6 +37,7 @@ export default function WorkOrderCard({
       ? "指派师傅"
       : "登记上门时间";
   const technicianFees = orderTechnicianFeeBreakdown(order, technicians);
+  const clientAmount = orderChargeTotal(order);
 
   return (
     <article
@@ -75,11 +76,15 @@ export default function WorkOrderCard({
         <div style={styles.meta}>
           <span><Clock size={12} />报修 {fmtDate(order.reportTime)}</span>
           {client ? <span>甲方 <b>{client.name}</b></span> : null}
-          {technicianFees.length > 0 ? technicianFees.map((fee) => (
-            <span key={fee.name} style={{ color: technicianFeeStatusColor(fee) }}>
-              <Users size={12} /> {fee.name} ¥{fee.amount} {fee.settled ? "已结算" : "未结算"}
+          {clientAmount > 0 ? <span style={{ color: order.clientSettled ? "#2F7A4F" : "#C99A1D" }}>甲方 ¥{clientAmount} {order.clientSettled ? "已结算" : "未结算"}</span> : null}
+          {technicianFees.length > 0 ? technicianFees.map((fee) => {
+            const meta = expenseSettlementMeta(fee);
+            return (
+            <span key={fee.name} style={{ color: meta.color }}>
+              <Users size={12} /> {fee.name} ¥{fee.amount} {meta.label}
             </span>
-          )) : <span><Users size={12} />师傅 <b>{technician?.name || "未指派"}</b></span>}
+            );
+          }) : <span><Users size={12} />师傅 <b>{technician?.name || "未指派"}</b></span>}
         </div>
       </div>
     </article>

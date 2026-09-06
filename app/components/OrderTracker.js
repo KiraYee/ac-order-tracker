@@ -7,7 +7,7 @@ import {
   Pencil, Link2, DollarSign, TrendingUp, CalendarCheck
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
-import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor } from "../../lib/dataHelpers";
+import { costItemAmount, costItemQty, costItemUnitPrice, visitCostTotal, orderVisitCostTotal, orderTechnicianFeeBreakdown, expenseSettlementMeta, orderChargeTotal } from "../../lib/dataHelpers";
 import { ticketNoFromReportTime } from "../../lib/dataHelpers";
 
 const STATUSES = ["待核实", "待派工", "待上门", "维修中", "已完成", "已取消"];
@@ -106,7 +106,9 @@ function expenseRecordFromDb(row) {
     technicianId: row.technician_id,
     type: row.type,
     amount: row.amount,
+    paymentMethod: row.payment_method,
     isSettled: row.is_settled,
+    advanceReimbursed: row.advance_reimbursed,
   };
 }
 
@@ -563,6 +565,7 @@ function OrderCard({ order, technicians, onClick }) {
   const lastVisit = order.visits[order.visits.length - 1];
   const tech = technicians.find((t) => t.id === order.assignedTechnicianId);
   const technicianFees = orderTechnicianFeeBreakdown(order, technicians);
+  const clientAmount = orderChargeTotal(order);
   return (
     <button style={styles.card} className="card-hover" onClick={onClick}>
       <div style={styles.cardTop}>
@@ -591,13 +594,14 @@ function OrderCard({ order, technicians, onClick }) {
           )}
           {!tech && <span style={styles.cardMeta}>师傅：未指派</span>}
           {technicianFees.map((fee) => (
-            <span key={fee.name} style={{ ...styles.cardMeta, color: technicianFeeStatusColor(fee) }}>
-              {fee.name} ¥{fee.amount} {fee.settled ? "已结算" : "未结算"}
+            <span key={fee.name} style={{ ...styles.cardMeta, color: expenseSettlementMeta(fee).color }}>
+              {fee.name} ¥{fee.amount} {expenseSettlementMeta(fee).label}
             </span>
           ))}
-          <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
-            甲方{order.clientSettled ? "已结算" : "未结算"}
+          {clientAmount > 0 && <span style={{ ...styles.settlementBadge, ...(order.clientSettled ? styles.settlementBadgeDone : styles.settlementBadgePending) }}>
+            甲方 ¥{clientAmount} {order.clientSettled ? "已结算" : "未结算"}
           </span>
+          }
         </div>
       )}
       {lastVisit && (
