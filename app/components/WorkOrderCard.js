@@ -75,14 +75,19 @@ export default function WorkOrderCard({
         {order.notes ? <div style={styles.notes}><strong>备注</strong>：{order.notes}</div> : null}
         <div style={styles.meta}>
           <span><Clock size={12} />报修 {fmtDate(order.reportTime)}</span>
-          {client ? <span>甲方 <b>{client.name}</b></span> : null}
-          {clientAmount > 0 ? <span style={{ color: order.clientSettled ? "#2F7A4F" : "#C99A1D" }}>甲方 ¥{clientAmount} {order.clientSettled ? "已结算" : "未结算"}</span> : null}
+          {clientAmount > 0 ? (
+            <span style={styles.settlementItem}>
+              <span>甲方{client ? ` ${client.name}` : ""}</span>
+              <span style={{ ...styles.settlementPill, ...(order.clientSettled ? styles.settlementDone : styles.settlementPending) }}>¥{clientAmount} · {order.clientSettled ? "已结算" : "未结算"}</span>
+            </span>
+          ) : null}
           {technicianFees.length > 0 ? technicianFees.map((fee) => {
             const meta = expenseSettlementMeta(fee);
             return (
-            <span key={fee.name} style={{ color: meta.color }}>
-              <Users size={12} /> {fee.name} ¥{fee.amount} {meta.label}
-            </span>
+              <span key={fee.name} style={styles.settlementItem}>
+                <span><Users size={12} /> {fee.name}</span>
+                <span style={{ ...styles.settlementPill, ...(meta.label === "已结清" ? styles.settlementDone : styles.settlementPending) }}>¥{fee.amount} · {meta.label}</span>
+              </span>
             );
           }) : <span><Users size={12} />师傅 <b>{technician?.name || "未指派"}</b></span>}
         </div>
@@ -108,6 +113,10 @@ const styles = {
   title: { fontSize: 14.5, fontWeight: 600, lineHeight: 1.4, color: "#14212B", minWidth: 0 },
   description: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
   notes: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
-  meta: { display: "flex", flexWrap: "wrap", gap: "6px 14px", color: "#9AA6AD", fontSize: 11.5, marginTop: 9 },
+  meta: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px 12px", color: "#9AA6AD", fontSize: 11.5, marginTop: 9 },
+  settlementItem: { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
+  settlementPill: { display: "inline-flex", alignItems: "center", borderRadius: 10, padding: "2px 6px", fontSize: 10.5, fontWeight: 700, lineHeight: 1.2 },
+  settlementPending: { color: "#C99A1D", background: "#FBEEDD" },
+  settlementDone: { color: "#2F7A4F", background: "#E4F3E9" },
   action: { border: 0, color: "#fff", borderRadius: 6, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, flexShrink: 0, cursor: "pointer", whiteSpace: "nowrap" },
 };
