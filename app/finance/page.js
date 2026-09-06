@@ -81,12 +81,13 @@ function FinanceView({ userEmail }) {
     ]);
     const storeById = new Map((storeRows || []).map((store) => [store.id, store]));
     const advanceByExpenseId = new Map((advs || []).map((item) => [item.expense_record_id, item.reimbursed === true]));
-    setOrders((ords || []).map(orderFromDb).map((order) => ({
+    const loadedOrders = (ords || []).map(orderFromDb).map((order) => ({
       ...order,
       store: storeById.get(order.storeId) || null,
       expenseRecords: (order.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
       visits: (order.visits || []).map((visit) => ({ ...visit, expenseRecords: (visit.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })) })),
-    })));
+    }));
+    setOrders(loadedOrders);
     setTechnicians(techs || []);
     setEmployees(employeeRows || []);
     setStores(storeRows || []);
@@ -110,15 +111,17 @@ function FinanceView({ userEmail }) {
   }
 
   async function toggleTechnicianSettled(item) {
-    const next = item.record.isSettled !== true;
+    const records = item.records || [item.record];
+    const next = !records.every((record) => record.isSettled === true);
     if (!next && !window.confirm("师傅费用已结算，确认撤销结算吗？")) return;
     try {
       const settledAt = next ? new Date().toISOString() : null;
-      const { error } = await supabase
+      const results = await Promise.all(records.map((record) => supabase
         .from("expense_records")
         .update({ is_settled: next, settled_at: settledAt, updated_at: new Date().toISOString() })
-        .eq("id", item.record.id);
-      if (error) throw error;
+        .eq("id", record.id)));
+      const failed = results.find((result) => result.error);
+      if (failed?.error) throw failed.error;
       await load();
     } catch (e) {
       setErrorMsg("更新失败：" + (e.message || "未知错误"));
@@ -130,11 +133,12 @@ function FinanceView({ userEmail }) {
     const results = await Promise.all(items.map(async (item) => {
       try {
         if (kind === "technician") {
-          const { error } = await supabase
+          const records = item.records || [item.record];
+          const results = await Promise.all(records.map((record) => supabase
             .from("expense_records")
             .update({ is_settled: true, settled_at: now, updated_at: new Date().toISOString() })
-            .eq("id", item.record.id);
-          return { error };
+            .eq("id", record.id)));
+          return { error: results.find((result) => result.error)?.error || null };
         }
         const update = kind === "client"
           ? { client_settled: true, client_settled_at: now }
@@ -223,18 +227,53 @@ function FinanceView({ userEmail }) {
       record,
       id: record.id,
       amount: Number(record.amount) || 0,
-      unpaidCost: record.isSettled === false ? Number(record.amount) || 0 : 0,
+       unpaidCost: record.isSettled !== true ? Number(record.amount) || 0 : 0,
       techName: record.technicianName,
     }))).sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
   }, [orders, technicians]);
+  const groupedPayables = useMemo(() => {
+    const groups = new Map();
+    for (const payable of payables) {
+      const visitKey = payable.record.visitId || `record-${payable.record.id}`;
+      const key = `${payable.order.id}:${visitKey}`;
+      const current = groups.get(key) || {
+        id: key,
+        order: payable.order,
+        visitId: payable.record.visitId || null,
+        techName: payable.techName,
+        records: [],
+        amount: 0,
+        technicianId: payable.record.technicianId,
+      };
+      current.records.push(payable.record);
+      current.amount += payable.amount;
+      groups.set(key, current);
+    }
+    return Array.from(groups.values()).map((group) => {
+      const methods = [...new Set(group.records.map((record) => record.paymentMethod || "待定"))];
+      const settledCount = group.records.filter((record) => record.isSettled === true).length;
+      const hasPendingAdvance = group.records.some((record) => record.paymentMethod === "advance" && record.advanceReimbursed !== true);
+      const visit = group.order.visits?.find((item) => item.id === group.visitId);
+      return {
+        ...group,
+        visit,
+        visitNumber: group.records[0]?.visitNumber || null,
+        settled: settledCount === group.records.length,
+        partiallySettled: settledCount > 0 && settledCount < group.records.length,
+        mixedPayment: methods.length > 1,
+        hasPendingAdvance,
+        paymentMethods: methods,
+      };
+    });
+  }, [payables]);
   const payableTotal = payables.reduce((s, p) => s + p.unpaidCost, 0);
 
   // 垫付待报销
   const pendingAdvances = advances.filter((a) => !a.reimbursed);
   const pendingAdvanceTotal = pendingAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const completedReceivables = receivables.filter((o) => o.clientSettled);
-  const completedPayables = payables.filter((p) => p.record.isSettled === true);
-  const pendingPayables = payables.filter((p) => p.record.isSettled === false);
+  const completedPayables = groupedPayables.filter((p) => p.settled);
+  const pendingPayables = groupedPayables.filter((p) => !p.settled);
   const completedAdvances = advances.filter((a) => a.reimbursed);
 
   if (loading) {
@@ -302,7 +341,7 @@ function FinanceView({ userEmail }) {
 
       {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
 
-      {tab === "payable" && <FinanceFilteredGroups kind="technician" targetRowId={targetRowId} pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.record.id} expenseRecordId={p.record.id} highlight={targetRowId === `expense-${p.record.id}`} order={p.order} kind="technician" amount={p.amount} settled={p.record.isSettled === true} settledAt={p.record.settledAt} statusFee={p.record} suffix={`${p.techName}${p.record.visitNumber ? ` · 第${p.record.visitNumber}次上门` : ""}`} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
+      {tab === "payable" && <FinanceFilteredGroups kind="technician" targetRowId={targetRowId} pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <TechnicianPayableRow key={p.id} item={p} highlight={targetRowId === `expense-${p.records[0]?.id}`} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
 
       {tab === "advances" && (
         <div>
@@ -384,7 +423,7 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
   const [selectedIds, setSelectedIds] = useState([]);
 
   useEffect(() => {
-    const completedRowIds = completed.map((item) => kind === "technician" ? `expense-${item.record.id}` : `advance-${item.id}`);
+    const completedRowIds = completed.map((item) => kind === "technician" ? `expense-${item.records?.[0]?.id || item.record?.id}` : `advance-${item.id}`);
     if (targetRowId && completedRowIds.includes(targetRowId)) setCompletedOpen(true);
   }, [targetRowId, completed, kind]);
 
@@ -444,12 +483,13 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
         跟单人: employees.find((employee) => employee.id === order?.followerId)?.name || "",
         金额: amountForItem(item),
         登记时间: dateForItem(item),
-        [kind === "advance" ? "报销时间" : "结算时间"]: kind === "advance" ? item.reimbursed_at || "" : (kind === "client" ? order?.clientSettledAt : item.record?.settledAt) || "",
+        [kind === "advance" ? "报销时间" : "结算时间"]: kind === "advance" ? item.reimbursed_at || "" : (kind === "client" ? order?.clientSettledAt : item.records?.map((record) => record.settledAt).filter(Boolean).sort().pop()) || "",
       };
       if (kind === "advance") row.垫付人 = item.employee_name || "";
       if (kind === "technician") {
-        row.师傅 = item.technicianName || "";
+        row.师傅 = item.techName || "";
         row.上门次数 = item.visitNumber ? `第${item.visitNumber}次` : "订单级";
+        row.费用明细 = item.records?.map((record) => `${record.label || "未命名"} ¥${record.amount}`).join("、") || "";
       }
       return row;
     });
@@ -465,7 +505,7 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
       ? item.reimbursed_at
       : kind === "client"
         ? order?.clientSettledAt
-        : item.record?.settledAt;
+        : item.records?.map((record) => record.settledAt).filter(Boolean).sort().pop();
     const settledLabel = kind === "advance" ? "已报销" : "已结算";
     return `${order?.ticketNo || "垫付"} · ¥${amountForItem(item).toLocaleString()} · ${settledLabel}${settledAt ? ` ${fmtDateShort(settledAt)}` : ""}`;
   }
@@ -522,6 +562,50 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
           <CheckCircle2 size={13} /> {settled ? "撤销结算" : kind === "client" ? "标记已结算" : "标记已结算"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function TechnicianPayableRow({ item, highlight = false, showSettlementDate = false, onSettle }) {
+  const [expanded, setExpanded] = useState(false);
+  const settledAt = item.records.map((record) => record.settledAt).filter(Boolean).sort().pop();
+  const status = item.settled
+    ? { label: "已结算", color: "#2F7A4F" }
+    : item.partiallySettled
+      ? { label: "部分结算", color: "#C99A1D" }
+      : item.hasPendingAdvance
+        ? { label: "部分待垫付报销", color: "#B5450C" }
+        : item.mixedPayment
+          ? { label: "混合支付方式", color: "#8A5A00" }
+          : { label: "待定", color: "#C99A1D" };
+  const display = orderStoreDisplay(item.order);
+  const location = display.storeName || `${display.city || ""}${display.mall || ""}` || item.order.mall || "未关联门店";
+  return (
+    <div id={`expense-${item.records[0]?.id}`} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
+      <div style={{ ...styles.rowMain, cursor: "pointer" }} onClick={() => setExpanded((value) => !value)}>
+        <span style={styles.ticketNo}>{item.order.ticketNo}</span>
+        <span style={styles.rowMall}>{location} · {item.techName}{item.visitNumber ? ` · 第${item.visitNumber}次上门` : ""} · 合计¥{item.amount}</span>
+        {showSettlementDate && <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>}
+        <span style={{ ...styles.statusHint, color: status.color }}>{status.label} {expanded ? "▲" : "▼"}</span>
+      </div>
+      <div style={styles.rowRight}>
+        <span style={{ ...styles.amount, color: status.color }}>¥{item.amount}</span>
+        <button style={{ ...styles.settleBtn, ...(item.settled ? styles.settleBtnDone : {}) }} onClick={onSettle}>
+          <CheckCircle2 size={13} /> {item.settled ? "撤销结算" : "标记已结算"}
+        </button>
+      </div>
+      {expanded && (
+        <div style={styles.payableDetails}>
+          {item.records.map((record) => (
+            <div key={record.id} style={styles.payableDetailRow}>
+              <span>{record.label || "未命名项目"}</span>
+              <span>¥{record.amount}</span>
+              <span>{record.paymentMethod === "advance" ? (record.advanceReimbursed === true ? "垫付已报销" : "垫付待报销") : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
+              <span>{record.isSettled === true ? "已结算" : "未结算"}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -692,6 +776,9 @@ const styles = {
   amount: { fontWeight: 700, fontSize: 14 },
   settleBtn: { display: "flex", alignItems: "center", gap: 4, background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 20, padding: "5px 10px", fontSize: 11.5, fontWeight: 600, color: "#4C6169" },
   settleBtnDone: { background: "#E4F3E9", borderColor: "#3E8F6355", color: "#2C6B45" },
+  statusHint: { fontSize: 11, fontWeight: 700 },
+  payableDetails: { marginTop: 8, width: "100%", background: "#F8FAF9", border: "1px solid #E2E9E8", borderRadius: 7, padding: "7px 9px" },
+  payableDetailRow: { display: "grid", gridTemplateColumns: "minmax(120px, 1fr) 80px 110px 70px", gap: 8, alignItems: "center", padding: "5px 0", borderBottom: "1px solid #E2E9E8", fontSize: 11.5, color: "#4C6169" },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", zIndex: 60 },
