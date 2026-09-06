@@ -302,7 +302,7 @@ export default function OrderTracker({ userEmail, onSignOut }) {
       );
       setErrorMsg("");
     } catch (e) {
-      setErrorMsg("指派师傅失败：" + (e.message || "未知错误"));
+      setErrorMsg("当前负责师傅操作失败：" + (e.message || "未知错误"));
     }
   }
 

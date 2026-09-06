@@ -8,7 +8,8 @@ import {
 import { supabase } from "../../lib/supabaseClient";
 import { pinyin } from "pinyin-pro";
 import * as XLSX from "xlsx";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import Link from "next/link";
 import AppShell from "../components/AppShell";
 import WorkOrderCard from "../components/WorkOrderCard";
 import OrderTimeoutNotice from "../components/OrderTimeoutNotice";
@@ -122,7 +123,13 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   const employeeById = new Map(employees.map((e) => [e.id, e.name]));
   const storeById = new Map(stores.map((store) => [store.id, store]));
   const exportOrders = orders;
-  const summary = exportOrders.map((order) => {
+  const summaryOrders = [...exportOrders].sort((a, b) => {
+    if (!a.reportTime && !b.reportTime) return 0;
+    if (!a.reportTime) return 1;
+    if (!b.reportTime) return -1;
+    return new Date(b.reportTime).getTime() - new Date(a.reportTime).getTime();
+  });
+  const summary = summaryOrders.map((order) => {
     const store = order.store || storeById.get(order.storeId);
     const storeName = store?.store_name || [order.city, order.mall].filter(Boolean).join("") || "";
     const quoteItems = orderQuoteItems(order);
@@ -147,25 +154,23 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
       : technicianFeeRecords.every((record) => record.isSettled === true) ? "是" : "否";
     return {
       "工单编号": order.ticketNo || "",
-      "报修时间": excelDate(order.reportTime),
       "城市": order.city || "",
-      "甲方": clientById.get(order.clientId) || "",
-      "门店": storeName,
+      "品牌": order.brand || "",
+      "商场": order.mall || storeName || "",
+      "报修时间": excelDate(order.reportTime),
+      "完工时间": excelDate(order.completedAt),
+      "当前状态": order.status || "",
       "故障描述": order.issueDesc || "",
       "备注": order.notes || "",
       "跟单人": employeeById.get(order.followerId) || "",
       "指派师傅": visitTechnicianNames.join("、"),
-      "当前状态": order.status || "",
-      "验收资料是否齐全": order.inspectionPhotoUrl?.trim() || order.comparePhotoUrl?.trim() ? "是" : "否",
-      "师傅报价总额": technicianQuoteTotal,
-      "保险费用总额": insuranceFeeTotal,
-      "师傅是否结算": technicianSettlement,
-      "甲方报价总额": clientQuoteTotal,
+      "师傅报价总和": technicianQuoteTotal,
+      "保险费用": insuranceFeeTotal,
+      "师傅是否结清": technicianSettlement,
+      "甲方报价": clientQuoteTotal,
       "报价备注": order.quoteNote || "",
-      "甲方是否已结算": order.clientSettled ? "是" : "否",
+      "甲方是否结清": order.clientSettled ? "是" : "否",
       "利润": clientQuoteTotal - technicianQuoteTotal - insuranceFeeTotal,
-      "完成时间": excelDate(order.completedAt),
-      "创建时间": excelDate(order.createdAt),
     };
   });
   const details = [];
@@ -404,7 +409,20 @@ function OrdersView({ userEmail }) {
   const [visitFormMode, setVisitFormMode] = useState(null);
   const [now, setNow] = useState(() => Date.now());
   const [closedOpen, setClosedOpen] = useState(false);
+  const router = useRouter();
   const searchParams = useSearchParams();
+
+  function openOrder(orderId) {
+    setSelectedId(orderId);
+    setVisitFormMode(null);
+    router.push(`/orders?open=${encodeURIComponent(orderId)}`);
+  }
+
+  function closeOrder() {
+    setSelectedId(null);
+    setVisitFormMode(null);
+    router.replace("/orders");
+  }
 
   function clearTimeFilter() {
     setExportTimeType("report");
@@ -451,7 +469,12 @@ function OrdersView({ userEmail }) {
 
   useEffect(() => {
     const openId = searchParams.get("open");
-    if (openId && orders.some((o) => o.id === openId)) setSelectedId(openId);
+    if (!openId) {
+      setSelectedId(null);
+      setVisitFormMode(null);
+      return;
+    }
+    if (orders.some((o) => o.id === openId)) setSelectedId(openId);
   }, [searchParams, orders]);
 
   async function fetchOrders() {
@@ -696,7 +719,7 @@ function OrdersView({ userEmail }) {
       };
       setOrders((prev) => [newOrder, ...prev].sort((a, b) => new Date(b.reportTime) - new Date(a.reportTime)));
       setShowNewOrder(false);
-      setSelectedId(newOrder.id);
+      openOrder(newOrder.id);
       setErrorMsg("");
     } catch (e) {
       setErrorMsg("创建工单失败：" + (e.message || "未知错误"));
@@ -778,7 +801,6 @@ function OrdersView({ userEmail }) {
           order_id: orderId,
           visit_time: visit.visitTime,
           service_type: visit.serviceType || null,
-          service_content: visit.serviceContent || null,
           master: visit.master,
           master_phone: visit.masterPhone || null,
           technician_id: visit.technicianId || null,
@@ -842,7 +864,6 @@ function OrdersView({ userEmail }) {
         .update({
           visit_time: visit.visitTime,
           service_type: visit.serviceType || null,
-          service_content: visit.serviceContent || null,
           master: visit.master,
           master_phone: visit.masterPhone || null,
           technician_id: visit.technicianId || null,
@@ -851,10 +872,13 @@ function OrdersView({ userEmail }) {
         })
         .eq("id", visitId);
       if (error) throw error;
+      const previousVisit = orders.flatMap((item) => item.visits || []).find((item) => item.id === visitId);
+      await Promise.all((previousVisit?.expenseRecords || []).map((record) => deleteExpenseRecord(record.id)));
+      const expenseRecords = await saveExpenseRecords(visitId, visit.expenseRecords || [], orderId);
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
-            ? { ...o, visits: o.visits.map((v) => (v.id === visitId ? { ...v, ...visit } : v)) }
+            ? { ...o, visits: o.visits.map((v) => (v.id === visitId ? { ...v, ...visit, expenseRecords } : v)) }
             : o
         )
       );
@@ -987,7 +1011,7 @@ function OrdersView({ userEmail }) {
       const { error: orderError } = await supabase.from("orders").delete().eq("id", order.id);
       if (orderError) throw new Error(`删除工单失败：${orderError.message || "未知错误"}`);
       setOrders((prev) => prev.filter((item) => item.id !== order.id));
-      setSelectedId(null);
+      closeOrder();
       setDeleteTarget(null);
       setSuccessMsg(`工单 ${order.ticketNo || ""} 已删除`);
       setErrorMsg("");
@@ -1163,8 +1187,8 @@ function OrdersView({ userEmail }) {
                   clients={clients}
                   now={now}
                   groupKey={group.key}
-                  onClick={() => setSelectedId(o.id)}
-                  onAction={group.key === "verify" ? () => updateStatus(o.id, "待派工") : group.key === "wait" ? () => setSelectedId(o.id) : undefined}
+                  onClick={() => openOrder(o.id)}
+                  onAction={group.key === "verify" ? () => updateStatus(o.id, "待派工") : group.key === "wait" ? () => openOrder(o.id) : undefined}
                 />)}
               </div> : null}
             </section>
@@ -1182,14 +1206,8 @@ function OrdersView({ userEmail }) {
           stores={stores}
           cities={cities}
           employees={employees}
-          onClose={() => {
-            setSelectedId(null);
-            setVisitFormMode(null);
-          }}
-          onNavigateToOrder={(id) => {
-            setSelectedId(id);
-            setVisitFormMode(null);
-          }}
+          onClose={closeOrder}
+          onNavigateToOrder={openOrder}
           onUpdateStatus={(status, expectedVisitTime) => updateStatus(selected.id, status, expectedVisitTime)}
           onAssignTechnician={(techId) => assignTechnician(selected.id, techId)}
           onAddTechnician={addTechnician}
@@ -1596,14 +1614,14 @@ function DetailPanel({
               </Field>
             </div>
             {store && (
-              <div style={styles.storeInfoBox}>
+              <Link href={`/stores?open=${encodeURIComponent(store.id)}`} style={styles.storeInfoBox}>
                 <div style={styles.storeInfoTitle}>门店档案</div>
                 <div>{store.city} · {store.brand} · {store.mall} · {store.store_name}</div>
                 {store.address && <div>地址：{store.address}</div>}
                 {store.contact_name && <div>联系人：{store.contact_name}{store.contact_phone ? ` · ${store.contact_phone}` : ""}</div>}
                 {store.special_requirements && <div style={styles.storeWarning}>特殊要求：{store.special_requirements}</div>}
                 {store.notes && <div>备注：{store.notes}</div>}
-              </div>
+              </Link>
             )}
             <div style={styles.formRow2}>
               <Field label="报修时间">
@@ -1685,7 +1703,7 @@ function DetailPanel({
           </div>
 
           <div style={styles.sectionBlock}>
-            <div style={styles.sectionTitle}><Wrench size={13} /> 指派师傅</div>
+            <div style={styles.sectionTitle}><Wrench size={13} /> 当前负责师傅</div>
             {assignedTech ? (
               <>
                 <div style={styles.assignedTechInfo}>
@@ -1704,7 +1722,7 @@ function DetailPanel({
               </>
             ) : (
               <>
-                <div style={styles.unassignedHint}>暂未指派师傅</div>
+                <div style={styles.unassignedHint}>暂未设置当前负责师傅</div>
                 <TechnicianPicker
                   technicians={technicians}
                   valueId={null}
@@ -1774,21 +1792,21 @@ function DetailPanel({
                 )}
               </div>
 
-              {visitFormMode && (
+              {visitFormMode === "new" && (
                   <VisitForm
-                  key={visitFormMode === "new" ? "new" : visitFormMode.id}
-                  initialVisit={visitFormMode === "new" ? null : visitFormMode}
+                  key="new"
+                  initialVisit={null}
                   onCancel={onCancelVisitForm}
                   onSubmit={(v) => {
-                    if (visitFormMode === "new") onAddVisit(v);
-                    else onUpdateVisit(visitFormMode.id, v);
+                    onAddVisit(v);
                   }}
-                  visitId={visitFormMode === "new" ? null : visitFormMode.id}
+                  visitId={null}
                   orderId={order.id}
                   employees={employees}
                   onCreateExpense={createExpenseRecord}
                   onUpdateExpense={updateExpenseRecord}
                   onDeleteExpense={deleteExpenseRecord}
+                  onUnsettleExpense={unsettleExpenseRecord}
                   technicians={technicians}
                   onAddTechnician={onAddTechnician}
                 />
@@ -1823,10 +1841,23 @@ function DetailPanel({
                           </div>
                           <div style={styles.timelineMaster}><Wrench size={12} /> {v.master}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
                           <div style={styles.serviceRecordMeta}>服务类型：{v.serviceType || "历史上门记录"}</div>
-                          {v.serviceContent && <div style={styles.serviceRecordContent}>服务内容：{v.serviceContent}</div>}
                           {expenseTotal > 0 && <div style={styles.serviceRecordCost}>本次支出：¥{expenseTotal}</div>}
                           {v.note && <div style={styles.timelineNote}>{v.note}</div>}
                           <div style={styles.timelineBy}>登记人：{v.createdBy || "—"}</div>
+                          {isEditing && (
+                            <VisitForm
+                              key={v.id}
+                              initialVisit={v}
+                              onCancel={onCancelVisitForm}
+                              onSubmit={(nextVisit) => onUpdateVisit(v.id, nextVisit)}
+                              visitId={v.id}
+                              orderId={order.id}
+                              employees={employees}
+                              technicians={technicians}
+                              onAddTechnician={onAddTechnician}
+                              deferSave
+                            />
+                          )}
                         </div>
                       </div>
                     );
@@ -2175,10 +2206,11 @@ const EXPENSE_TYPE_STYLES = {
   other: { background: "#EDEFEE", color: "#4C6169" },
 };
 
-function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense }) {
+function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(() => emptyExpenseRecord());
   const [saveError, setSaveError] = useState("");
+  const [settledNotice, setSettledNotice] = useState(null);
 
   function emptyExpenseRecord() {
     return {
@@ -2201,7 +2233,12 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   }
 
   function beginEdit(record) {
+    if (record.isSettled === true) {
+      setSettledNotice(record);
+      return;
+    }
     setSaveError("");
+    setSettledNotice(null);
     setEditingId(record.id);
     setDraft({ ...record, qty: record.qty ?? 1, unitPrice: record.unitPrice ?? "", payerName: record.payerName || "", notes: record.notes || "" });
   }
@@ -2226,6 +2263,11 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       settledAt: draft.isSettled ? (draft.settledAt || new Date().toISOString()) : null,
       notes: draft.notes.trim(),
     };
+    if (deferSave) {
+      onChange(editingId === "new" ? [...records, next] : records.map((record) => (record.id === editingId ? { ...record, ...next } : record)));
+      setEditingId(null);
+      return;
+    }
     const save = editingId === "new"
       ? ((visitId || orderId) ? onCreateExpense(visitId || null, next, orderId || null) : Promise.resolve(next))
       : ((visitId || orderId) ? onUpdateExpense(editingId, next) : Promise.resolve({ ...records.find((record) => record.id === editingId), ...next }));
@@ -2238,6 +2280,10 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   }
 
   function removeRecord(id) {
+    if (deferSave) {
+      onChange(records.filter((record) => record.id !== id));
+      return;
+    }
     if (visitId || orderId) {
       onDeleteExpense(id).then(() => onChange(records.filter((record) => record.id !== id))).catch((error) => {
         setSaveError(`删除费用失败：${error.message || "未知错误"}`);
@@ -2255,6 +2301,12 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   return (
     <Field label={fixedType === "insurance" ? "保险费用" : "本次支出"}>
       {saveError && <div style={styles.expenseError}>{saveError}</div>}
+      {settledNotice && (
+        <div style={styles.expenseSettledNotice}>
+          该笔支出已结清，不支持修改。如需修改，请先
+          <Link href={`/finance?open_expense=${encodeURIComponent(settledNotice.id)}`} style={styles.expenseFinanceLink}>前往财务页撤销结清</Link>
+        </div>
+      )}
       {records.length > 0 && (
         <div style={styles.expenseList}>
           {records.map((record) => (
@@ -2320,9 +2372,16 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
           </div>
           <input style={styles.input} value={draft.notes} onChange={(e) => updateDraft("notes", e.target.value)} placeholder="备注（选填）" />
           <div style={styles.expenseEditorActions}>
-            {amountLocked && <button type="button" style={styles.ghostBtn} onClick={() => { if (window.confirm("该费用已结清，确认撤销结清并允许修改金额吗？")) onUnsettleExpense(editingId).then((saved) => { onChange(records.map((record) => record.id === editingId ? saved : record)); }).catch(() => {}); }}>撤销结清</button>}
+            {amountLocked && <button type="button" style={styles.ghostBtn} onClick={() => {
+              if (deferSave) {
+                onChange(records.map((record) => record.id === editingId ? { ...record, isSettled: false, settledAt: null } : record));
+                setEditingId(null);
+              } else if (window.confirm("该费用已结清，确认撤销结清并允许修改金额吗？")) {
+                onUnsettleExpense(editingId).then((saved) => onChange(records.map((record) => record.id === editingId ? saved : record))).catch(() => {});
+              }
+            }}>{deferSave ? "暂存撤销结清" : "撤销结清"}</button>}
             <button type="button" style={styles.ghostBtn} onClick={() => setEditingId(null)}>取消</button>
-            <button type="button" style={styles.smallPrimaryBtn} onClick={saveDraft}>保存费用</button>
+            <button type="button" style={styles.smallPrimaryBtn} onClick={saveDraft}>{deferSave ? "暂存本次支出" : "保存费用"}</button>
           </div>
         </div>
       )}
@@ -2331,11 +2390,10 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   );
 }
 
-function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense }) {
+function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const initTech = initialVisit ? technicians.find((t) => t.id === initialVisit.technicianId) : null;
   const [technician, setTechnician] = useState(initTech || null);
   const [serviceType, setServiceType] = useState(initialVisit?.serviceType || "");
-  const [serviceContent, setServiceContent] = useState(initialVisit?.serviceContent || "");
   const [expenseRecords, setExpenseRecords] = useState(() => (initialVisit?.expenseRecords || []).map((record) => ({ ...record })));
   const [masterPhone, setMasterPhone] = useState(initialVisit?.masterPhone || "");
   const [freeMasterName, setFreeMasterName] = useState(initialVisit && !initTech ? initialVisit.master : "");
@@ -2359,7 +2417,6 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = 
       masterPhone: masterPhone.trim(),
       technicianId: technician?.id || null,
       serviceType: serviceType.trim(),
-      serviceContent: serviceContent.trim(),
       visitTime: new Date(visitTime).toISOString(),
       resultType,
       expenseRecords,
@@ -2394,9 +2451,6 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = 
       <Field label="服务类型">
         <input style={styles.input} value={serviceType} onChange={(e) => setServiceType(e.target.value)} placeholder="如：上门检查 / 维修 / 复查" />
       </Field>
-      <Field label="服务内容">
-        <textarea style={{ ...styles.input, minHeight: 60, resize: "vertical" }} value={serviceContent} onChange={(e) => setServiceContent(e.target.value)} placeholder="记录本次实际服务内容" />
-      </Field>
       <Field label="上门时间">
         <input style={styles.input} type="datetime-local" value={visitTime} onChange={(e) => setVisitTime(e.target.value)} />
       </Field>
@@ -2410,6 +2464,7 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = 
         onUpdateExpense={onUpdateExpense}
         onDeleteExpense={onDeleteExpense}
         onUnsettleExpense={onUnsettleExpense}
+        deferSave={deferSave}
       />
       <Field label="处理结果">
         <div style={styles.resultChips}>
@@ -2795,13 +2850,15 @@ const styles = {
   expenseAdvanceUnsettled: { color: "#B5450C", background: "#FBEDE4", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
   expenseMonthlyUnsettled: { color: "#718087", background: "#F4F7F6", borderRadius: 5, padding: "1px 4px", fontWeight: 700 },
   expenseError: { color: "#B5450C", background: "#FBEDE4", border: "1px solid #D9631F66", borderRadius: 6, padding: "7px 9px", marginBottom: 8, fontSize: 12, fontWeight: 600 },
+  expenseSettledNotice: { color: "#7A5A16", background: "#FFF4CC", border: "1px solid #D9A44188", borderRadius: 7, padding: "8px 10px", marginBottom: 8, fontSize: 12, lineHeight: 1.6 },
+  expenseFinanceLink: { color: "#145560", fontWeight: 700, textDecoration: "underline", marginLeft: 3 },
   expenseNote: { color: "#8FA1A8" },
   expenseEditor: { display: "flex", flexDirection: "column", gap: 8, background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 8 },
   expenseFormGrid: { display: "grid", gridTemplateColumns: "1fr 1.4fr .65fr .8fr auto", gap: 6, alignItems: "center" },
   expenseAmountPreview: { fontSize: 12, fontWeight: 700, color: "#145560", whiteSpace: "nowrap" },
   expensePaymentRow: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: 10, fontSize: 12, color: "#4C6169" },
   expenseEditorActions: { display: "flex", justifyContent: "flex-end", gap: 6 },
-  storeInfoBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: "9px 10px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
+  storeInfoBox: { display: "block", textDecoration: "none", background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: "9px 10px", marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },
   storeInfoTitle: { fontWeight: 700, color: "#145560", marginBottom: 3 },
   storePermitHint: { background: "#FBEEDD", border: "1px solid #E08E3380", borderRadius: 8, padding: "7px 9px", marginBottom: 12, color: "#A5661A", fontSize: 12, fontWeight: 700 },
   storeMatchBox: { background: "#F4F7F6", border: "1px solid #BFD8D5", borderRadius: 8, padding: 10, marginBottom: 12, fontSize: 12, lineHeight: 1.6, color: "#4C6169" },

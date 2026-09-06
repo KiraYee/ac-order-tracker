@@ -33,7 +33,10 @@ export default function OverviewAnomalyList({ items = [] }) {
               <Link key={`${item.order.id}-${type}`} href={`/orders?open=${item.order.id}`} className="overview-anomaly-row">
                 <span className={`overview-anomaly-icon ${tone}`}><Icon size={16} /></span>
                 <span className="overview-anomaly-id mono">{item.order.ticketNo || "未编号"}</span>
-                <span className="overview-anomaly-title">{item.location}</span>
+                <span className="overview-anomaly-title">
+                  <span>故障描述：{item.issueDesc || "未填写"}</span>
+                  {item.notes ? <span>备注：{item.notes}</span> : null}
+                </span>
                 <span className={`overview-anomaly-status ${tone}`}>{label}</span>
                 <ChevronRight className="overview-anomaly-arrow" size={14} />
               </Link>

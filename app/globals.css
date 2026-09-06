@@ -36,7 +36,7 @@ body {
 .overview-anomaly-icon.high, .overview-anomaly-status.high { color: #b5450c; }
 .overview-anomaly-icon.mid, .overview-anomaly-status.mid { color: #8a6a0f; }
 .overview-anomaly-id { color: #96a19d; font-size: 12px; }
-.overview-anomaly-title { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.overview-anomaly-title { display: flex; flex-direction: column; gap: 3px; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .overview-anomaly-status { font-size: 12.5px; font-weight: 600; white-space: nowrap; text-align: right; }
 .overview-anomaly-arrow { color: #96a19d; }
 .overview-empty { min-height: 64px; display: flex; align-items: center; justify-content: center; color: #96a19d; font-size: 12.5px; }

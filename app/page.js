@@ -8,7 +8,7 @@ import AppShell from "./components/AppShell";
 import OverviewAnomalyList from "./components/OverviewAnomalyList";
 import OverviewFinanceSummary from "./components/OverviewFinanceSummary";
 import OverviewResourceDistribution from "./components/OverviewResourceDistribution";
-import { getFinanceSummary, getOrderExceptions, orderFromDb, orderStoreDisplay } from "../lib/dataHelpers";
+import { getFinanceSummary, getOrderExceptions, orderFromDb } from "../lib/dataHelpers";
 
 export default function DashboardPage() {
   return <AppShell active="dashboard"><DashboardContent /></AppShell>;
@@ -48,8 +48,7 @@ function DashboardContent() {
   const anomalies = useMemo(() => orders.flatMap((order) => {
     const types = getOrderExceptions(order, now);
     if (!types.length) return [];
-    const display = orderStoreDisplay(order);
-    return [{ order, types, location: [display.city, display.brand, display.mall].filter(Boolean).join(" · ") || "未填写地点" }];
+    return [{ order, types, issueDesc: order.issueDesc, notes: order.notes }];
   }), [orders, now]);
   const financeSummary = useMemo(() => getFinanceSummary(orders, advances), [orders, advances]);
 

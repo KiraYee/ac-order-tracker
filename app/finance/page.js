@@ -31,6 +31,7 @@ function FinanceView({ userEmail }) {
   const [editingAdvance, setEditingAdvance] = useState(null);
   const [financeFilters, setFinanceFilters] = useState({ range: "all", start: "", end: "", storeId: "", followerId: "", technicianId: "", employeeName: "" });
   const searchParams = useSearchParams();
+  const [targetRowId, setTargetRowId] = useState(null);
 
   useEffect(() => {
     load();
@@ -40,6 +41,34 @@ function FinanceView({ userEmail }) {
     const requestedTab = searchParams.get("tab");
     if (["receivable", "payable", "advances", "all"].includes(requestedTab)) setTab(requestedTab);
   }, [searchParams]);
+
+  useEffect(() => {
+    const expenseId = searchParams.get("open_expense");
+    if (!expenseId || loading) return;
+    const expenseRecords = orders.flatMap((order) => [
+      ...(order.expenseRecords || []),
+      ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
+    ]);
+    const expense = expenseRecords.find((record) => record.id === expenseId);
+    if (!expense) return;
+    if (expense.type === "technician_fee") {
+      setTab("payable");
+      setTargetRowId(`expense-${expenseId}`);
+    }
+  }, [searchParams, orders, advances, loading]);
+
+  useEffect(() => {
+    if (!targetRowId) return undefined;
+    const timer = window.setTimeout(() => {
+      const target = document.getElementById(targetRowId);
+      if (target) target.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 150);
+    const clearHighlight = window.setTimeout(() => setTargetRowId(null), 4200);
+    return () => {
+      window.clearTimeout(timer);
+      window.clearTimeout(clearHighlight);
+    };
+  }, [targetRowId, tab]);
 
   async function load() {
     setLoading(true);
@@ -267,7 +296,7 @@ function FinanceView({ userEmail }) {
 
       {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
 
-      {tab === "payable" && <FinanceFilteredGroups kind="technician" pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.record.id} order={p.order} kind="technician" amount={p.amount} settled={p.record.isSettled === true} settledAt={p.record.settledAt} suffix={`${p.techName}${p.record.visitNumber ? ` · 第${p.record.visitNumber}次上门` : ""}`} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
+      {tab === "payable" && <FinanceFilteredGroups kind="technician" targetRowId={targetRowId} pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <FinanceOrderRow key={p.record.id} expenseRecordId={p.record.id} highlight={targetRowId === `expense-${p.record.id}`} order={p.order} kind="technician" amount={p.amount} settled={p.record.isSettled === true} settledAt={p.record.settledAt} suffix={`${p.techName}${p.record.visitNumber ? ` · 第${p.record.visitNumber}次上门` : ""}`} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
 
       {tab === "advances" && (
         <div>
@@ -276,7 +305,31 @@ function FinanceView({ userEmail }) {
               <Plus size={15} /> 登记垫付
             </button>
           </div>
-          <FinanceFilteredGroups kind="advance" pending={pendingAdvances} completed={completedAdvances} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(a, options) => <FinanceAdvanceRow key={a.id} advance={a} orders={orders} showTypeTag={false} showSettlementDate={options.showSettlementDate} onEdit={() => setEditingAdvance(a)} onToggle={() => toggleReimbursed(a)} />} />
+          <FinanceFilteredGroups
+            kind="advance"
+            targetRowId={targetRowId}
+            pending={pendingAdvances}
+            completed={completedAdvances}
+            orders={orders}
+            stores={stores}
+            technicians={technicians}
+            employees={employees}
+            filters={financeFilters}
+            setFilters={setFinanceFilters}
+            onBatchSettle={batchSettle}
+            render={(a, options) => (
+              <FinanceAdvanceRow
+                key={a.id}
+                highlight={targetRowId === `advance-${a.id}`}
+                advance={a}
+                orders={orders}
+                showTypeTag={false}
+                showSettlementDate={options.showSettlementDate}
+                onEdit={() => setEditingAdvance(a)}
+                onToggle={() => toggleReimbursed(a)}
+              />
+            )}
+          />
         </div>
       )}
 
@@ -320,9 +373,14 @@ function FinanceView({ userEmail }) {
   );
 }
 
-function FinanceFilteredGroups({ kind, pending, completed, orders, stores, technicians, employees, filters, setFilters, onBatchSettle, render }) {
+function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, stores, technicians, employees, filters, setFilters, onBatchSettle, render }) {
   const [completedOpen, setCompletedOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
+
+  useEffect(() => {
+    const completedRowIds = completed.map((item) => kind === "technician" ? `expense-${item.record.id}` : `advance-${item.id}`);
+    if (targetRowId && completedRowIds.includes(targetRowId)) setCompletedOpen(true);
+  }, [targetRowId, completed, kind]);
 
   const orderForItem = (item) => kind === "advance" ? orders.find((order) => order.id === item.order_id) : kind === "technician" ? item.order : item;
   const amountForItem = (item) => kind === "advance"
@@ -437,14 +495,14 @@ function FinanceSectionGroup({ pending, completed, emptyText, render }) {
   );
 }
 
-function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, statusFee, showTypeTag = false, showSettlementDate = false, onSettle }) {
+function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, suffix, statusFee, expenseRecordId, highlight = false, showTypeTag = false, showSettlementDate = false, onSettle }) {
   const color = kind === "client" ? "#1F7A8C" : "#3E8F63";
   const feeStatusColor = kind === "technician" ? technicianFeeStatusColor(statusFee) : color;
   const label = kind === "client" ? "客户" : "师傅";
   const storeDisplay = orderStoreDisplay(order);
   const location = storeDisplay.storeName || `${storeDisplay.city}${storeDisplay.mall}` || order.mall || "未关联门店";
   return (
-    <div style={styles.row}>
+    <div id={kind === "technician" ? `expense-${expenseRecordId}` : undefined} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
       <Link href={`/orders?open=${order.id}`} style={styles.rowMain}>
         {showTypeTag && <span style={{ ...styles.typeTag, background: `${color}18`, color }}>{label}</span>}
         <span style={styles.ticketNo}>{order.ticketNo}</span>
@@ -462,12 +520,12 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
   );
 }
 
-function FinanceAdvanceRow({ advance, orders, showTypeTag = false, showSettlementDate = false, onEdit, onToggle }) {
+function FinanceAdvanceRow({ advance, orders, highlight = false, showTypeTag = false, showSettlementDate = false, onEdit, onToggle }) {
   const relatedOrder = advance.order_id ? orders.find((o) => o.id === advance.order_id) : null;
   const relatedStore = relatedOrder ? orderStoreDisplay(relatedOrder) : null;
   const location = relatedStore?.storeName || (relatedStore ? `${relatedStore.city}${relatedStore.mall}` : "");
   return (
-    <div style={styles.row}>
+    <div id={`advance-${advance.id}`} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
       <div style={styles.rowMain}>
         {showTypeTag && <span style={{ ...styles.typeTag, background: "#FBEEDD", color: "#A5661A" }}>垫付</span>}
         <span style={{ fontWeight: 700 }}>{advance.employee_name}</span>
@@ -617,6 +675,7 @@ const styles = {
   emptyState: { display: "flex", flexDirection: "column", alignItems: "center", padding: "50px 0", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 12 },
   list: { display: "flex", flexDirection: "column", gap: 8, paddingBottom: 32 },
   row: { display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: "12px 14px", flexWrap: "wrap", gap: 10 },
+  targetRow: { background: "#FFF4CC", borderColor: "#D9A441", boxShadow: "0 0 0 3px #D9A44133", transition: "background 0.4s ease, box-shadow 0.4s ease" },
   rowMain: { display: "flex", alignItems: "center", gap: 10, textDecoration: "none", color: "#16262B", flexWrap: "wrap" },
   ticketNo: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8FA1A8" },
   rowMall: { fontWeight: 600, fontSize: 13 },

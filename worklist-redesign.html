@@ -332,7 +332,7 @@
     <h1>工单</h1>
     <div class="date">8月31日 · 14 单</div>
   </div>
-  <div class="subline">完整状态链：待核实 → 待派工 → 已指派师傅·时间待定 → 待上门 → 维修中 → 已完成/已取消</div>
+  <div class="subline">完整状态链：待核实 → 待派工 → 当前负责师傅·时间待定 → 待上门 → 维修中 → 已完成/已取消</div>
 
   <!-- 待核实 -->
   <div class="group verify">
@@ -409,7 +409,7 @@
   <div class="group">
     <div class="group-head">
       <span class="marker wait"></span>
-      <span class="group-title">已指派师傅 · 时间待定</span>
+      <span class="group-title">当前负责师傅 · 时间待定</span>
       <span class="group-count">4</span>
     </div>
     <div class="rows">
@@ -621,7 +621,7 @@
   </div>
 
   <div class="note">
-    改动说明：完整还原状态链，共 6 个阶段——待核实（需人工判断，警示黄）→ 待派工（核实通过、缺师傅，紫色，带"指派师傅"按钮）→ 已指派师傅·时间待定（灰色弱化，因为只是被动等待）→ 待上门（师傅+时间都确定，其中最近上门的用橙色标出）→ 维修中（师傅在场处理，蓝色+呼吸动效表示"活跃"）→ 已完成/已取消（默认折叠）。颜色只在"需要人主动做点什么"或"最紧急"的阶段出现，纯等待类状态统一弱化。
+    改动说明：完整还原状态链，共 6 个阶段——待核实（需人工判断，警示黄）→ 待派工（核实通过、缺师傅，紫色，带"指派师傅"按钮）→ 当前负责师傅·时间待定（灰色弱化，因为只是被动等待）→ 待上门（师傅+时间都确定，其中最近上门的用橙色标出）→ 维修中（师傅在场处理，蓝色+呼吸动效表示"活跃"）→ 已完成/已取消（默认折叠）。颜色只在"需要人主动做点什么"或"最紧急"的阶段出现，纯等待类状态统一弱化。
   </div>
 
 </div>
@@ -644,7 +644,7 @@ function markDispatched(rowId, btn){
   btn.disabled = true;
   btn.style.cursor = 'default';
   const hint = row.querySelector('.dispatch-hint');
-  if(hint){ hint.textContent = '已流转至「已指派师傅·时间待定」'; hint.style.color = '#2F7A4F'; }
+  if(hint){ hint.textContent = '已流转至「当前负责师傅·时间待定」'; hint.style.color = '#2F7A4F'; }
 }
 </script>
 </body>

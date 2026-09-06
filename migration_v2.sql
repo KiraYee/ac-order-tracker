@@ -22,7 +22,7 @@ alter table fee_presets enable row level security;
 create policy "team can access fee_presets" on fee_presets
   for all using (auth.role() = 'authenticated') with check (auth.role() = 'authenticated');
 
--- orders 表新增：关联工单、指派师傅
+-- orders 表新增：关联工单、当前负责师傅
 alter table orders add column if not exists related_order_id uuid references orders(id);
 alter table orders add column if not exists assigned_technician_id uuid references technicians(id);
 

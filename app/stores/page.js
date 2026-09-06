@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Loader2, MapPin, Pencil, Phone, Store, X } from "lucide-react";
 import AppShell from "../components/AppShell";
@@ -24,10 +25,30 @@ function StoresView() {
   const [selectedId, setSelectedId] = useState(null);
   const [editingStore, setEditingStore] = useState(null);
   const [showNew, setShowNew] = useState(false);
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  function openStore(storeId) {
+    setEditingStore(null);
+    setSelectedId(storeId);
+    router.push(`/stores?open=${encodeURIComponent(storeId)}`);
+  }
+
+  function closeStore() {
+    setSelectedId(null);
+    setEditingStore(null);
+    router.replace("/stores");
+  }
 
   useEffect(() => {
     load();
   }, []);
+
+  useEffect(() => {
+    const openId = searchParams.get("open");
+    setSelectedId(openId || null);
+    if (!openId) setEditingStore(null);
+  }, [searchParams]);
 
   async function load() {
     setLoading(true);
@@ -139,7 +160,7 @@ function StoresView() {
               </div>
               <div style={styles.list}>
                 {rows.map(({ store, relatedOrders, recentServiceTime }) => (
-                  <button key={store.id} type="button" style={styles.card} className="card-hover" onClick={() => setSelectedId(store.id)}>
+                  <button key={store.id} type="button" style={styles.card} className="card-hover" onClick={() => openStore(store.id)}>
                     <div style={styles.cardTop}>
                       <div style={styles.storeName}>{storeNameWithoutCity(store.store_name, store.city)}</div>
                       <Pencil size={14} color="#8FA1A8" />
@@ -162,7 +183,7 @@ function StoresView() {
           store={selected.store}
           orders={selected.relatedOrders}
           recentServiceTime={selected.recentServiceTime}
-          onClose={() => setSelectedId(null)}
+          onClose={closeStore}
           onEdit={() => setEditingStore(selected.store)}
         />
       )}
@@ -184,7 +205,7 @@ function StoresView() {
               if (error) throw error;
               setStores((prev) => [...prev, row]);
               setShowNew(false);
-              setSelectedId(row.id);
+              openStore(row.id);
             } catch (e) {
               setErrorMsg("创建门店失败：" + (e.message || "未知错误"));
             }

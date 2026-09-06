@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, MapPin, Users } from "lucide-react";
+import { Clock, Users } from "lucide-react";
 import { STATUS_STYLE, fmtDate, orderStoreDisplay, orderTechnicianFeeBreakdown, technicianFeeStatusColor } from "../../lib/dataHelpers";
 import OrderTimeoutNotice from "./OrderTimeoutNotice";
 
@@ -70,8 +70,8 @@ export default function WorkOrderCard({
             )}
           </div>
         </div>
-        {display.address ? <div style={styles.address}><MapPin size={12} />{display.address}</div> : null}
-        <div style={styles.description}>{order.issueDesc || "未填写故障描述"}</div>
+        <div style={styles.description}><strong>故障描述</strong>：{order.issueDesc || "未填写"}</div>
+        {order.notes ? <div style={styles.notes}><strong>备注</strong>：{order.notes}</div> : null}
         <div style={styles.meta}>
           <span><Clock size={12} />报修 {fmtDate(order.reportTime)}</span>
           {client ? <span>甲方 <b>{client.name}</b></span> : null}
@@ -101,8 +101,8 @@ const styles = {
   completedLabel: { background: "#E4F3E9", color: "#2C6B45" },
   cancelledLabel: { background: "#F3EAEA", color: "#8A5252" },
   title: { fontSize: 14.5, fontWeight: 600, lineHeight: 1.4, color: "#14212B", minWidth: 0 },
-  address: { display: "flex", alignItems: "center", gap: 4, color: "#5E6C76", fontSize: 11.5, marginTop: 4 },
   description: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
+  notes: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
   meta: { display: "flex", flexWrap: "wrap", gap: "6px 14px", color: "#9AA6AD", fontSize: 11.5, marginTop: 9 },
   action: { border: 0, color: "#fff", borderRadius: 6, padding: "6px 10px", fontSize: 11.5, fontWeight: 600, flexShrink: 0, cursor: "pointer", whiteSpace: "nowrap" },
 };
