@@ -242,6 +242,15 @@ async function ensureTechnicianFeePreset(record) {
 }
 
 async function createExpenseRecord(visitId, record, orderId = null) {
+  if (record.type === "technician_fee" && !visitId) {
+    throw new Error("师傅费用必须关联具体的上门记录，请先保存或选择上门记录");
+  }
+  if (record.type === "technician_fee" && !record.technicianId) {
+    throw new Error("师傅费用必须关联具体师傅");
+  }
+  if (!orderId && !record.orderId) {
+    throw new Error("费用记录缺少订单，无法保存");
+  }
   const isAdvance = record.paymentMethod === "advance";
   const now = new Date().toISOString();
   const { data, error } = await supabase.from("expense_records").insert({
@@ -267,6 +276,12 @@ async function createExpenseRecord(visitId, record, orderId = null) {
 }
 
 async function updateExpenseRecord(id, record) {
+  if (record.type === "technician_fee" && !record.visitId) {
+    throw new Error("师傅费用必须关联具体的上门记录，不能保存为订单级费用");
+  }
+  if (record.type === "technician_fee" && !record.technicianId) {
+    throw new Error("师傅费用必须关联具体师傅");
+  }
   const { data: previousRow, error: previousError } = await supabase
     .from("expense_records")
     .select("*")
@@ -944,6 +959,9 @@ function OrdersView({ userEmail }) {
   }
 
   async function saveExpenseRecords(visitId, records, orderId, replaceExisting = false) {
+    if (!visitId) throw new Error("保存上门费用时缺少上门记录 ID");
+    const invalidTechnicianFee = records.find((record) => record.type === "technician_fee" && !record.technicianId);
+    if (invalidTechnicianFee) throw new Error("师傅费用必须关联具体师傅");
     if (replaceExisting) {
       const { error } = await supabase.from("expense_records").delete().eq("visit_id", visitId);
       if (error) throw error;
