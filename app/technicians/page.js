@@ -198,6 +198,19 @@ function TechniciansView() {
 }
 
 function TechnicianDetail({ technician, orders, onClose }) {
+  const [presets, setPresets] = useState([]);
+  const [label, setLabel] = useState("");
+  const [price, setPrice] = useState("");
+  useEffect(() => { supabase.from("technician_fee_presets").select("*").eq("technician_id", technician.id).order("created_at").then(({ data }) => setPresets(data || [])); }, [technician.id]);
+  async function savePreset(preset) {
+    const payload = { label: preset.label.trim(), unit_price: Number(preset.unit_price) || 0 };
+    if (!payload.label) return;
+    const result = preset.id
+      ? await supabase.from("technician_fee_presets").update(payload).eq("id", preset.id).select().single()
+      : await supabase.from("technician_fee_presets").insert({ ...payload, technician_id: technician.id }).select().single();
+    if (!result.error) setPresets((prev) => preset.id ? prev.map((item) => item.id === preset.id ? result.data : item) : [...prev, result.data]);
+  }
+  async function deletePreset(id) { if (window.confirm("确定删除这条常用报价吗？")) { await supabase.from("technician_fee_presets").delete().eq("id", id); setPresets((prev) => prev.filter((item) => item.id !== id)); } }
   const relatedVisits = [];
   for (const o of orders) {
     for (const v of o.visits || []) {
@@ -248,6 +261,11 @@ function TechnicianDetail({ technician, orders, onClose }) {
           </div>
 
           <div style={styles.sectionLabel}>参与过的上门记录（{relatedVisits.length}）</div>
+          <div style={styles.sectionLabel}>报价管理</div>
+          <div style={styles.presetList}>
+            {presets.map((preset) => <div key={preset.id} style={styles.presetRow}><input style={styles.input} value={preset.label} onChange={(e) => setPresets((prev) => prev.map((item) => item.id === preset.id ? { ...item, label: e.target.value } : item))} /><input style={{ ...styles.input, width: 90 }} type="number" value={preset.unit_price} onChange={(e) => setPresets((prev) => prev.map((item) => item.id === preset.id ? { ...item, unit_price: e.target.value } : item))} /><button style={styles.tinyIconBtn} onClick={() => savePreset(preset)}><CheckCircle2 size={13} /></button><button style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={() => deletePreset(preset.id)}><X size={13} /></button></div>)}
+            <div style={styles.presetRow}><input style={styles.input} placeholder="项目名称" value={label} onChange={(e) => setLabel(e.target.value)} /><input style={{ ...styles.input, width: 90 }} type="number" placeholder="单价" value={price} onChange={(e) => setPrice(e.target.value)} /><button style={styles.primaryBtn} onClick={async () => { await savePreset({ label, unit_price: price }); setLabel(""); setPrice(""); }}>新增</button></div>
+          </div>
           {relatedVisits.length === 0 ? (
             <div style={styles.emptyVisits}>还没有记录</div>
           ) : (
@@ -440,6 +458,8 @@ const styles = {
   sectionLabel: { fontSize: 11, fontWeight: 700, color: "#8FA1A8", textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 8 },
   emptyVisits: { fontSize: 12.5, color: "#8FA1A8", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 9, padding: 16, textAlign: "center" },
   visitList: { display: "flex", flexDirection: "column", gap: 8 },
+  presetList: { display: "flex", flexDirection: "column", gap: 6, marginBottom: 18 },
+  presetRow: { display: "flex", alignItems: "center", gap: 5, background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, padding: 6 },
   visitRow: { display: "block", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 9, padding: 10, textDecoration: "none", color: "#16262B" },
   visitDate: { fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: "#8FA1A8" },
   modal: { background: "#fff", borderRadius: 14, width: 420, maxWidth: "92vw", maxHeight: "88vh", display: "flex", flexDirection: "column", margin: "auto" },

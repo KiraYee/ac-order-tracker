@@ -231,6 +231,16 @@ export default function OrdersPage() {
   );
 }
 
+async function ensureTechnicianFeePreset(record) {
+  if (record.type !== "technician_fee" || !record.technicianId || !record.label?.trim()) return;
+  const { error } = await supabase.from("technician_fee_presets").upsert({
+    technician_id: record.technicianId,
+    label: record.label.trim(),
+    unit_price: Number(record.unitPrice) || 0,
+  }, { onConflict: "technician_id,label", ignoreDuplicates: true });
+  if (error) throw error;
+}
+
 async function createExpenseRecord(visitId, record, orderId = null) {
   const isAdvance = record.paymentMethod === "advance";
   const now = new Date().toISOString();
@@ -250,6 +260,7 @@ async function createExpenseRecord(visitId, record, orderId = null) {
     notes: record.notes || null,
   }).select().single();
   if (error) throw error;
+  await ensureTechnicianFeePreset(record);
   const expenseRecord = expenseRecordFromDb(data);
   if (isAdvance) await syncExpenseAdvance(expenseRecord, null);
   return expenseRecord;
@@ -283,6 +294,7 @@ async function updateExpenseRecord(id, record) {
   }).eq("id", id).select().single();
   if (error) throw error;
   const expenseRecord = expenseRecordFromDb(data);
+  await ensureTechnicianFeePreset(record);
   await syncExpenseAdvance(expenseRecord, previousRecord);
   return expenseRecord;
 }
@@ -380,6 +392,7 @@ function OrdersView({ userEmail }) {
   const [orders, setOrders] = useState([]);
   const [technicians, setTechnicians] = useState([]);
   const [feePresets, setFeePresets] = useState([]);
+  const [technicianFeePresets, setTechnicianFeePresets] = useState([]);
   const [clients, setClients] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [cities, setCities] = useState([]);
@@ -443,6 +456,7 @@ function OrdersView({ userEmail }) {
     fetchOrders();
     fetchTechnicians();
     fetchFeePresets();
+    fetchTechnicianFeePresets();
     fetchClients();
     fetchEmployees();
     fetchVocabulary("cities", setCities);
@@ -530,6 +544,14 @@ function OrdersView({ userEmail }) {
       if (error) throw error;
       setFeePresets(data || []);
     } catch (e) { /* 静默 */ }
+  }
+
+  async function fetchTechnicianFeePresets() {
+    try {
+      const { data, error } = await supabase.from("technician_fee_presets").select("*").order("created_at");
+      if (error) throw error;
+      setTechnicianFeePresets(data || []);
+    } catch (e) { /* migration 尚未执行时忽略 */ }
   }
 
   async function fetchClients() {
@@ -843,6 +865,7 @@ function OrdersView({ userEmail }) {
       if (error) throw error;
 
       const expenseRecords = await saveExpenseRecords(row.id, visit.expenseRecords || [], orderId);
+      await fetchTechnicianFeePresets();
 
       const order = orders.find((o) => o.id === orderId);
       let nextStatus = order ? order.status : "维修中";
@@ -905,6 +928,7 @@ function OrdersView({ userEmail }) {
       const previousVisit = orders.flatMap((item) => item.visits || []).find((item) => item.id === visitId);
       await Promise.all((previousVisit?.expenseRecords || []).map((record) => deleteExpenseRecord(record.id)));
       const expenseRecords = await saveExpenseRecords(visitId, visit.expenseRecords || [], orderId);
+      await fetchTechnicianFeePresets();
       setOrders((prev) =>
         prev.map((o) =>
           o.id === orderId
@@ -940,6 +964,7 @@ function OrdersView({ userEmail }) {
       settled_at: record.paymentMethod === "advance" ? (record.settledAt || new Date().toISOString()) : (record.isSettled ? (record.settledAt || new Date().toISOString()) : null),
       notes: record.notes || null,
     }));
+    await Promise.all(records.map((record) => ensureTechnicianFeePreset(record)));
     const { data, error } = await supabase.from("expense_records").insert(rows).select();
     if (error) throw error;
     const expenseRecords = (data || []).map(expenseRecordFromDb);
@@ -951,10 +976,21 @@ function OrdersView({ userEmail }) {
 
   async function deleteVisit(orderId, visitId) {
     try {
+      // 不依赖数据库外键是否配置了 ON DELETE CASCADE：先显式清理本次上门关联的费用。
+      const { error: expensesError } = await supabase
+        .from("expense_records")
+        .delete()
+        .eq("visit_id", visitId);
+      if (expensesError) throw new Error(`删除上门费用失败：${expensesError.message || "未知错误"}`);
       const { error } = await supabase.from("visits").delete().eq("id", visitId);
       if (error) throw error;
       setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, visits: o.visits.filter((v) => v.id !== visitId) } : o))
+        prev.map((o) => o.id === orderId ? {
+          ...o,
+          // expense_records 同时被挂在订单顶层和 visit 节点下；删除 visit 后两处都要同步移除。
+          expenseRecords: (o.expenseRecords || []).filter((record) => record.visitId !== visitId),
+          visits: o.visits.filter((v) => v.id !== visitId),
+        } : o)
       );
       setErrorMsg("");
     } catch (e) {
@@ -1232,6 +1268,7 @@ function OrdersView({ userEmail }) {
           orders={orders}
           technicians={technicians}
           feePresets={feePresets}
+          technicianFeePresets={technicianFeePresets}
           clients={clients}
           stores={stores}
           cities={cities}
@@ -1257,7 +1294,7 @@ function OrdersView({ userEmail }) {
           onAddVisit={(v) => addVisit(selected.id, v)}
           onUpdateVisit={(visitId, v) => updateVisit(selected.id, visitId, v)}
           onDeleteVisit={(visitId) => deleteVisit(selected.id, visitId)}
-          onCreateExpense={createExpenseRecord}
+          onCreateExpense={async (...args) => { const saved = await createExpenseRecord(...args); await fetchTechnicianFeePresets(); return saved; }}
           onUpdateExpense={updateExpenseRecord}
           onDeleteExpense={deleteExpenseRecord}
           onUnsettleExpense={unsettleExpenseRecord}
@@ -1515,7 +1552,7 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
 }
 
 function DetailPanel({
-  order, orders, technicians, feePresets, clients, cities, employees, stores,
+  order, orders, technicians, feePresets, technicianFeePresets = [], clients, cities, employees, stores,
   onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
   onAddFeePreset, onDeleteFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
   visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm,
@@ -1833,6 +1870,7 @@ function DetailPanel({
                   visitId={null}
                   orderId={order.id}
                   employees={employees}
+                  technicianFeePresets={technicianFeePresets}
                   onCreateExpense={createExpenseRecord}
                   onUpdateExpense={updateExpenseRecord}
                   onDeleteExpense={deleteExpenseRecord}
@@ -1883,6 +1921,7 @@ function DetailPanel({
                               visitId={v.id}
                               orderId={order.id}
                               employees={employees}
+                              technicianFeePresets={technicianFeePresets}
                               technicians={technicians}
                               onAddTechnician={onAddTechnician}
                               deferSave
@@ -2236,7 +2275,7 @@ const EXPENSE_TYPE_STYLES = {
   other: { background: "#EDEFEE", color: "#4C6169" },
 };
 
-function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
+function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], technicianId = null, technicianFeePresets = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(() => emptyExpenseRecord());
   const [saveError, setSaveError] = useState("");
@@ -2246,6 +2285,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
     return {
       type: fixedType || "technician_fee",
       label: fixedType === "insurance" ? "保险费" : "",
+      technicianId: fixedType === "insurance" ? null : technicianId,
       qty: 1,
       unitPrice: "",
       paymentMethod: null,
@@ -2259,7 +2299,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   function beginNew() {
     setSaveError("");
     setEditingId("new");
-    setDraft(emptyExpenseRecord());
+    setDraft({ ...emptyExpenseRecord(), technicianId: fixedType === "insurance" ? null : technicianId });
   }
 
   function beginEdit(record) {
@@ -2331,6 +2371,11 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   return (
     <Field label={fixedType === "insurance" ? "保险费用" : "本次支出"}>
       {saveError && <div style={styles.expenseError}>{saveError}</div>}
+      {!fixedType && technicianFeePresets.length > 0 && (
+        <div style={styles.feePresetRow}>
+          {technicianFeePresets.map((preset) => <button key={preset.id} type="button" style={styles.feePresetChip} onClick={() => { setEditingId("new"); setDraft({ ...emptyExpenseRecord(), label: preset.label, unitPrice: preset.unit_price, technicianId: preset.technician_id }); }}>{preset.label} ¥{preset.unit_price}</button>)}
+        </div>
+      )}
       {settledNotice && (
         <div style={styles.expenseSettledNotice}>
           该笔支出已结清，不支持修改。如需修改，请先
@@ -2414,7 +2459,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   );
 }
 
-function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
+function VisitForm({ initialVisit, onCancel, onSubmit, technicians, technicianFeePresets = [], employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const initTech = initialVisit ? technicians.find((t) => t.id === initialVisit.technicianId) : null;
   const [technician, setTechnician] = useState(initTech || null);
   const [serviceType, setServiceType] = useState(initialVisit?.serviceType || "");
@@ -2429,6 +2474,12 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = 
   const [resultType, setResultType] = useState(initialVisit?.resultType || "scheduled");
   const [note, setNote] = useState(initialVisit?.note || "");
   const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (technician?.id && !initialVisit) {
+      setExpenseRecords((prev) => prev.map((record) => record.type === "technician_fee" ? { ...record, technicianId: technician.id } : record));
+    }
+  }, [technician?.id, initialVisit]);
 
   function submit() {
     const masterName = technician ? technician.name : freeMasterName.trim();
@@ -2484,11 +2535,14 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, employees = 
         visitId={initialVisit?.id}
         orderId={orderId}
         employees={employees}
+        technicians={technicians}
+        technicianId={technician?.id || null}
+        technicianFeePresets={technicianFeePresets.filter((preset) => preset.technician_id === technician?.id)}
         onCreateExpense={onCreateExpense}
         onUpdateExpense={onUpdateExpense}
         onDeleteExpense={onDeleteExpense}
         onUnsettleExpense={onUnsettleExpense}
-        deferSave={deferSave}
+        deferSave={deferSave || !initialVisit}
       />
       <Field label="处理结果">
         <div style={styles.resultChips}>
