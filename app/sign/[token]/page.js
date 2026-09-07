@@ -14,7 +14,7 @@ const SIGNATURE_BOX = { x: 100, y: 110, maxW: 250, maxH: 26 };
 const TIME_FIELDS = { year: { x: 333, y: 96.264 }, month: { x: 388, y: 96.264 }, day: { x: 436, y: 96.264 } };
 
 function cropTransparentSignature(canvas) {
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
   const { width, height } = canvas;
   const pixels = context.getImageData(0, 0, width, height).data;
   let left = width; let top = height; let right = 0; let bottom = 0; let found = false;
@@ -44,6 +44,10 @@ export default function SignPage({ params }) {
   const [status, setStatus] = useState("loading");
   const [loadError, setLoadError] = useState("");
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isSigning, setIsSigning] = useState(false);
+  const [signError, setSignError] = useState("");
+  const [signedNotice, setSignedNotice] = useState("");
+  const [previewVersion, setPreviewVersion] = useState(0);
   const padRef = useRef(null);
   const previewRef = useRef(null);
   const wrapRef = useRef(null);
@@ -88,7 +92,7 @@ export default function SignPage({ params }) {
     };
     renderPreview().catch((error) => { if (!cancelled) { setLoadError(error.message || "PDF 预览失败"); setStatus("error"); } });
     return () => { cancelled = true; };
-  }, [status, view]);
+  }, [status, view, previewVersion]);
 
   const resizePad = useCallback(() => {
     const canvas = padRef.current; const wrap = wrapRef.current;
@@ -122,39 +126,66 @@ export default function SignPage({ params }) {
     page.drawRectangle({ x: 320, y: 87, width: 155, height: 18, color: rgb(1, 1, 1) });
     const fullDate = `${moment.getFullYear()}年${moment.getMonth() + 1}月${moment.getDate()}日`;
     pdf.registerFontkit(fontkit);
-    const fontBytes = await (await fetch("/NotoSerifSC-Regular.otf")).arrayBuffer();
+    const fontResponse = await fetch("/NotoSerifSC-Regular.otf", { cache: "force-cache" });
+    if (!fontResponse.ok) throw new Error(`中文字体加载失败（HTTP ${fontResponse.status}）`);
+    const fontBytes = await fontResponse.arrayBuffer();
     const bodyFont = await pdf.embedFont(fontBytes, { subset: true });
     page.drawText(fullDate, { x: 322, y: 91, size: 12, font: bodyFont, color: rgb(0.10, 0.16, 0.13) });
     return pdf.save();
   }
 
   async function confirmSign() {
-    if (!hasSignature) return;
-    const signature = cropTransparentSignature(padRef.current);
-    if (!signature) return;
-    const signedBytes = await createSignedPdf(signature, new Date());
-    signedPdfRef.current = new Uint8Array(signedBytes);
-    const uploadData = new FormData();
-    uploadData.append("file", new File([signedBytes], "signed.pdf", { type: "application/pdf" }));
-    const saved = await fetch(`/api/acceptance-forms/${encodeURIComponent(params.token)}/sign`, { method: "POST", body: uploadData });
-    if (!saved.ok) throw new Error((await saved.json()).error || "保存签字失败");
-    setFinalImage(true);
-    setStatus("signed");
-    setShowSignature(false);
-    setView("done");
+    if (!hasSignature || isSigning) return;
+    setIsSigning(true);
+    setSignError("");
+    try {
+      const signature = cropTransparentSignature(padRef.current);
+      if (!signature) throw new Error("没有读取到签名笔迹，请重新签名");
+      const signedBytes = await createSignedPdf(signature, new Date());
+      signedPdfRef.current = new Uint8Array(signedBytes);
+      const uploadData = new FormData();
+      uploadData.append("file", new File([signedBytes], "signed.pdf", { type: "application/pdf" }));
+      const saved = await fetch(`/api/acceptance-forms/${encodeURIComponent(params.token)}/sign`, { method: "POST", body: uploadData });
+      let savedBody = null;
+      try { savedBody = await saved.json(); } catch { /* keep the HTTP error below */ }
+      if (!saved.ok) {
+        if (saved.status === 409) {
+          const latest = await fetch(`/api/acceptance-forms/${encodeURIComponent(params.token)}`, { cache: "no-store" });
+          if (latest.ok) {
+            signedPdfRef.current = new Uint8Array(await latest.arrayBuffer());
+            setPreviewVersion((version) => version + 1);
+          }
+          setSignedNotice("⚠️ 该验收单已完成签字。本验收单已经完成签署，无需重复签署。");
+          setShowSignature(false);
+          setStatus("signed");
+          setView("done");
+          return;
+        }
+        throw new Error(savedBody?.error || `保存签字失败（HTTP ${saved.status}）`);
+      }
+      setFinalImage(true);
+      setStatus("signed");
+      setShowSignature(false);
+      setView("done");
+    } catch (error) {
+      console.error("确认签字失败", error);
+      setSignError(error.message || "确认签字失败，请稍后重试");
+    } finally {
+      setIsSigning(false);
+    }
   }
   async function downloadPdf() {
     const bytes = signedPdfRef.current || sourcePdfRef.current;
     if (!bytes) return; setIsDownloading(true);
     try { const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" })); const link = document.createElement("a"); link.href = url; link.download = "项目完工验收单-已签字.pdf"; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); } finally { setIsDownloading(false); }
   }
-  function reset() { signedPdfRef.current = null; setView("document"); setShowSignature(false); setHasSignature(false); setFinalImage(null); setStatus("pending_signature"); }
+  function reset() { signedPdfRef.current = null; setView("document"); setShowSignature(false); setHasSignature(false); setFinalImage(null); setSignError(""); setSignedNotice(""); setStatus("pending_signature"); }
 
   if (status === "loading") return <main className="sign-demo-page"><section className="sign-phone-screen"><div className="sign-loading-state">正在读取验收单…</div></section></main>;
   if (status === "error") return <main className="sign-demo-page"><section className="sign-phone-screen"><div className="sign-loading-state">{loadError}</div></section></main>;
   const signedView = status === "signed" || view === "done";
   return <main className="sign-demo-page"><section className="sign-phone-screen">
-    {!signedView ? <div className="sign-document-view"><header className="sign-document-topbar"><span className="sign-demo-eyebrow">PROJECT COMPLETION</span><h1>项目完工验收单</h1></header><div className="sign-document-scroll"><div className="sign-document-frame"><canvas ref={previewRef} className="sign-pdf-preview" aria-label="完工验收单预览" /></div></div><div className="sign-bottom-cta"><button className="sign-demo-primary" type="button" onClick={() => setShowSignature(true)}><PenLine size={17} /> 点击签名</button></div></div> : <div className="sign-done-view"><div className="sign-done-top"><div className="sign-done-badge"><Check size={25} strokeWidth={3} /></div><h1>签字完成</h1><p>{status === "signed" ? "该验收单已完成签署" : "签名与时间已自动添加到验收单底部"}</p><span className="sign-complete-pill">✓ 已完成</span></div><div className="sign-document-scroll sign-done-scroll"><div className="sign-document-frame"><canvas ref={previewRef} className="sign-pdf-preview" aria-label="已签字验收单预览" /></div></div><div className="sign-bottom-cta sign-done-cta"><button className="sign-demo-primary" type="button" onClick={downloadPdf} disabled={isDownloading}><Download size={17} /> {isDownloading ? "生成中…" : "下载已签字版本"}</button>{status !== "signed" && <button className="sign-reset-button" type="button" onClick={reset}><RotateCcw size={13} /> 重新体验一次</button>}</div></div>}
-    {showSignature && <div className="sign-sheet-backdrop" role="presentation" onClick={() => setShowSignature(false)}><section className="sign-sheet" role="dialog" aria-modal="true" aria-labelledby="sign-sheet-title" onClick={(event) => event.stopPropagation()}><div className="sign-sheet-head"><h2 id="sign-sheet-title">请在下方签字</h2><button className="sign-close-button" type="button" aria-label="关闭签名窗口" onClick={() => setShowSignature(false)}><X size={20} /></button></div><p className="sign-sheet-hint">签名会自动贴到验收单底部“门店签字”处，并自动盖上签署时间</p><div className="sign-pad-wrap" ref={wrapRef}><canvas ref={padRef} className="sign-pad-canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} /><div className="sign-pad-baseline" /></div><div className="sign-sheet-actions"><button className="sign-sheet-secondary" type="button" onClick={clearPad}>清除重签</button><button className="sign-demo-primary" type="button" onClick={confirmSign} disabled={!hasSignature}>确认签字</button></div></section></div>}
+    {!signedView ? <div className="sign-document-view"><header className="sign-document-topbar"><span className="sign-demo-eyebrow">PROJECT COMPLETION</span><h1>项目完工验收单</h1></header><div className="sign-document-scroll"><div className="sign-document-frame"><canvas ref={previewRef} className="sign-pdf-preview" aria-label="完工验收单预览" /></div></div><div className="sign-bottom-cta"><button className="sign-demo-primary" type="button" onClick={() => setShowSignature(true)}><PenLine size={17} /> 点击签名</button></div></div> : <div className="sign-done-view"><div className="sign-done-top"><div className="sign-done-badge"><Check size={25} strokeWidth={3} /></div><h1>签字完成</h1><p>{signedNotice || (status === "signed" ? "该验收单已完成签署，无需重复签署" : "签名与时间已自动添加到验收单底部")}</p><span className="sign-complete-pill">✓ 已完成</span></div><div className="sign-document-scroll sign-done-scroll"><div className="sign-document-frame"><canvas ref={previewRef} className="sign-pdf-preview" aria-label="已签字验收单预览" /></div></div><div className="sign-bottom-cta sign-done-cta"><button className="sign-demo-primary" type="button" onClick={downloadPdf} disabled={isDownloading}><Download size={17} /> {isDownloading ? "生成中…" : "下载已签字版本"}</button>{status !== "signed" && <button className="sign-reset-button" type="button" onClick={reset}><RotateCcw size={13} /> 重新体验一次</button>}</div></div>}
+    {showSignature && <div className="sign-sheet-backdrop" role="presentation" onClick={() => !isSigning && setShowSignature(false)}><section className="sign-sheet" role="dialog" aria-modal="true" aria-labelledby="sign-sheet-title" onClick={(event) => event.stopPropagation()}><div className="sign-sheet-head"><h2 id="sign-sheet-title">请在下方签字</h2><button className="sign-close-button" type="button" aria-label="关闭签名窗口" onClick={() => !isSigning && setShowSignature(false)}><X size={20} /></button></div><p className="sign-sheet-hint">签名会自动贴到验收单底部“门店签字”处，并自动盖上签署时间</p><div className="sign-pad-wrap" ref={wrapRef}><canvas ref={padRef} className="sign-pad-canvas" onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerUp} onPointerCancel={pointerUp} /><div className="sign-pad-baseline" /></div>{signError && <p className="sign-sign-error" role="alert">{signError}</p>}<div className="sign-sheet-actions"><button className="sign-sheet-secondary" type="button" onClick={clearPad} disabled={isSigning}>清除重签</button><button className="sign-demo-primary" type="button" onClick={confirmSign} disabled={!hasSignature || isSigning}>{isSigning ? "签署中…" : "确认签字"}</button></div></section></div>}
   </section></main>;
 }

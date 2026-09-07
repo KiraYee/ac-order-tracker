@@ -203,6 +203,7 @@ textarea {
 .sign-sheet-head h2 { margin: 0; font-size: 14.5px; }
 .sign-close-button { display: flex; padding: 2px 6px; border: 0; background: none; color: #6b7269; cursor: pointer; }
 .sign-sheet-hint { margin: 0 0 10px; color: #6b7269; font-size: 12px; line-height: 1.55; }
+.sign-sign-error { margin: 10px 0 0; color: #b5450c; font-size: 12px; line-height: 1.5; }
 .sign-pad-wrap { position: relative; overflow: hidden; border: 1.5px solid #16211d; border-radius: 10px; background: #fcfbf7; touch-action: none; }
 .sign-pad-canvas { display: block; width: 100%; height: 170px; touch-action: none; }
 .sign-pad-baseline { position: absolute; right: 8%; bottom: 26px; left: 8%; border-bottom: 1px dashed #c9c3b0; pointer-events: none; }
@@ -212,7 +213,7 @@ textarea {
 .sign-done-top { flex-shrink: 0; padding: 20px 24px 6px; text-align: center; }
 .sign-done-badge { width: 46px; height: 46px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; border-radius: 50%; background: #0e6e58; color: #fff; }
 .sign-done-top h1 { margin: 0 0 3px; font-size: 16px; }
-.sign-done-top p { margin: 0; color: #6b7269; font-size: 12px; }
+.sign-done-top p { margin: 0; color: #6b7269; font-size: 14px; line-height: 1.6; }
 .sign-complete-pill { display: inline-flex; margin-top: 8px; padding: 4px 10px; border-radius: 20px; background: #dcede6; color: #0a5343; font-family: "IBM Plex Mono", monospace; font-size: 10.5px; }
 .sign-done-scroll { padding-top: 12px; }
 .sign-done-cta { display: flex; flex-direction: column; align-items: center; gap: 8px; }
