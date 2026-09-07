@@ -234,34 +234,31 @@ function FinanceView({ userEmail }) {
   const groupedPayables = useMemo(() => {
     const groups = new Map();
     for (const payable of payables) {
-      const visitKey = payable.record.visitId || `record-${payable.record.id}`;
-      const key = `${payable.order.id}:${visitKey}`;
+      const key = payable.order.id;
       const current = groups.get(key) || {
         id: key,
         order: payable.order,
-        visitId: payable.record.visitId || null,
-        techName: payable.techName,
+        techNames: new Set(),
         records: [],
         amount: 0,
-        technicianId: payable.record.technicianId,
+        technicianIds: new Set(),
       };
+      current.techNames.add(payable.techName);
       current.records.push(payable.record);
       current.amount += payable.amount;
+      if (payable.record.technicianId) current.technicianIds.add(payable.record.technicianId);
       groups.set(key, current);
     }
     return Array.from(groups.values()).map((group) => {
       const methods = [...new Set(group.records.map((record) => record.paymentMethod || "待定"))];
       const settledCount = group.records.filter((record) => record.isSettled === true).length;
-      const hasPendingAdvance = group.records.some((record) => record.paymentMethod === "advance" && record.advanceReimbursed !== true);
-      const visit = group.order.visits?.find((item) => item.id === group.visitId);
       return {
         ...group,
-        visit,
-        visitNumber: group.records[0]?.visitNumber || null,
+        techName: [...group.techNames].join("、"),
+        technicianId: [...group.technicianIds][0] || null,
         settled: settledCount === group.records.length,
         partiallySettled: settledCount > 0 && settledCount < group.records.length,
         mixedPayment: methods.length > 1,
-        hasPendingAdvance,
         paymentMethods: methods,
       };
     });
@@ -567,45 +564,19 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
 }
 
 function TechnicianPayableRow({ item, highlight = false, showSettlementDate = false, onSettle }) {
-  const [expanded, setExpanded] = useState(false);
-  const settledAt = item.records.map((record) => record.settledAt).filter(Boolean).sort().pop();
-  const status = item.settled
-    ? { label: "已结算", color: "#2F7A4F" }
-    : item.partiallySettled
-      ? { label: "部分结算", color: "#C99A1D" }
-      : item.hasPendingAdvance
-        ? { label: "部分待垫付报销", color: "#B5450C" }
-        : item.mixedPayment
-          ? { label: "混合支付方式", color: "#8A5A00" }
-          : { label: "待定", color: "#C99A1D" };
   const display = orderStoreDisplay(item.order);
   const location = display.storeName || `${display.city || ""}${display.mall || ""}` || item.order.mall || "未关联门店";
   return (
     <div id={`expense-${item.records[0]?.id}`} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
-      <div style={{ ...styles.rowMain, cursor: "pointer" }} onClick={() => setExpanded((value) => !value)}>
+      <Link href={`/orders?open=${item.order.id}`} style={styles.rowMain}>
         <span style={styles.ticketNo}>{item.order.ticketNo}</span>
-        <span style={styles.rowMall}>{location} · {item.techName}{item.visitNumber ? ` · 第${item.visitNumber}次上门` : ""} · 合计¥{item.amount}</span>
-        {showSettlementDate && <span style={styles.rowDate}>结算：{settledAt ? fmtDateShort(settledAt) : "—"}</span>}
-        <span style={{ ...styles.statusHint, color: status.color }}>{status.label} {expanded ? "▲" : "▼"}</span>
-      </div>
+        <span style={styles.rowMall}>{location} · {item.techName} · 完工：{item.order.completedAt ? fmtDateShort(item.order.completedAt) : "未完工"} · 合计¥{item.amount}</span>
+      </Link>
       <div style={styles.rowRight}>
-        <span style={{ ...styles.amount, color: status.color }}>¥{item.amount}</span>
         <button style={{ ...styles.settleBtn, ...(item.settled ? styles.settleBtnDone : {}) }} onClick={onSettle}>
           <CheckCircle2 size={13} /> {item.settled ? "撤销结算" : "标记已结算"}
         </button>
       </div>
-      {expanded && (
-        <div style={styles.payableDetails}>
-          {item.records.map((record) => (
-            <div key={record.id} style={styles.payableDetailRow}>
-              <span>{record.label || "未命名项目"}</span>
-              <span>¥{record.amount}</span>
-              <span>{record.paymentMethod === "advance" ? (record.advanceReimbursed === true ? "垫付已报销" : "垫付待报销") : record.paymentMethod === "monthly_settlement" ? "月结" : "待定"}</span>
-              <span>{record.isSettled === true ? "已结算" : "未结算"}</span>
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

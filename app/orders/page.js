@@ -41,6 +41,124 @@ function formatExpectedVisitTime(iso) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}::${String(date.getMinutes()).padStart(2, "0")}`.replace("::", ":");
 }
 
+function acceptancePhotoPath(orderId, fileName) {
+  return `${orderId}/${fileName}`;
+}
+
+function acceptancePhotoFileName(originalName) {
+  const originalExtension = originalName.split(".").pop()?.toLowerCase() || "jpg";
+  const extension = /^[a-z0-9]{1,10}$/.test(originalExtension) ? originalExtension : "jpg";
+  const randomPart = Math.random().toString(36).slice(2, 10);
+  return `${Date.now()}-${randomPart}.${extension}`;
+}
+
+function acceptancePhotoPathFromUrl(photoUrl) {
+  try {
+    const path = decodeURIComponent(new URL(photoUrl).pathname);
+    const marker = "/acceptance-photos/";
+    const markerIndex = path.indexOf(marker);
+    return markerIndex >= 0 ? path.slice(markerIndex + marker.length) : "";
+  } catch {
+    return "";
+  }
+}
+
+function AcceptancePhotoUploader({ order, onPatch }) {
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const inputRef = useRef(null);
+  const photoUrl = order.acceptancePhotoUrl || "";
+
+  async function uploadPhoto(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setError("");
+    if (!file.type.startsWith("image/")) {
+      setError("上传失败：请选择图片文件。");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setError("上传失败：图片大小不能超过 10MB。");
+      return;
+    }
+    setIsUploading(true);
+    try {
+      const fileName = acceptancePhotoFileName(file.name);
+      const path = acceptancePhotoPath(order.id, fileName);
+      const renamedFile = new File([file], fileName, { type: file.type, lastModified: file.lastModified });
+      const { error: uploadError } = await supabase.storage
+        .from("acceptance-photos")
+        .upload(path, renamedFile, { upsert: false, contentType: file.type, cacheControl: "3600" });
+      if (uploadError) throw uploadError;
+      const { data } = supabase.storage.from("acceptance-photos").getPublicUrl(path);
+      const saved = await onPatch({ acceptancePhotoUrl: `${data.publicUrl}?v=${Date.now()}` });
+      if (!saved) throw new Error("图片地址保存失败，请重试。");
+      const previousPath = acceptancePhotoPathFromUrl(photoUrl);
+      if (previousPath) await supabase.storage.from("acceptance-photos").remove([previousPath]);
+    } catch (uploadError) {
+      setError(`上传失败：${uploadError.message || "无法上传图片，请稍后重试。"}`);
+    } finally {
+      setIsUploading(false);
+    }
+  }
+
+  async function deletePhoto() {
+    if (!photoUrl || !window.confirm("确定删除这张验收单照片吗？")) return;
+    setError("");
+    setIsDeleting(true);
+    try {
+      const path = acceptancePhotoPathFromUrl(photoUrl);
+      if (!path) throw new Error("无法识别图片存储路径，请联系管理员处理。");
+      const { error: removeError } = await supabase.storage.from("acceptance-photos").remove([path]);
+      if (removeError) throw removeError;
+      const saved = await onPatch({ acceptancePhotoUrl: null });
+      if (!saved) throw new Error("照片记录删除失败，请重试。");
+    } catch (deleteError) {
+      setError(`删除失败：${deleteError.message || "无法删除图片，请稍后重试。"}`);
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <Field label="验收单照片">
+        <div style={styles.acceptanceUploadBox}>
+          {photoUrl ? (
+            <button type="button" style={styles.acceptancePreviewButton} onClick={() => setIsPreviewOpen(true)} aria-label="点击放大查看验收单照片">
+              <img src={photoUrl} alt="验收单照片缩略图，点击放大查看" style={styles.acceptancePreview} />
+            </button>
+          ) : (
+            <div style={styles.acceptanceEmpty}>尚未上传验收单照片</div>
+          )}
+          <div style={styles.acceptanceUploadActions}>
+            <input ref={inputRef} type="file" accept="image/*" onChange={uploadPhoto} style={{ display: "none" }} />
+            <button type="button" style={styles.smallPrimaryBtn} onClick={() => inputRef.current?.click()} disabled={isUploading || isDeleting}>
+              {isUploading ? <><Loader2 size={13} className="spin" /> 上传中…</> : photoUrl ? "替换照片" : "选择图片上传"}
+            </button>
+            {photoUrl && <button type="button" style={styles.smallDangerBtn} onClick={deletePhoto} disabled={isUploading || isDeleting}>{isDeleting ? "删除中…" : "删除"}</button>}
+          </div>
+          <div style={styles.acceptanceHint}>支持 JPG、PNG 等图片，单张不超过 10MB · 点击缩略图可放大查看</div>
+          {error && <div style={styles.acceptanceError} role="alert">{error}</div>}
+        </div>
+      </Field>
+      {isPreviewOpen && photoUrl && (
+        <div style={styles.photoLightbox} onClick={() => setIsPreviewOpen(false)} role="dialog" aria-modal="true" aria-label="验收单照片大图预览">
+          <button type="button" style={styles.photoLightboxClose} onClick={() => setIsPreviewOpen(false)} aria-label="关闭大图预览">
+            <X size={22} />
+          </button>
+          <div style={styles.photoLightboxContent} onClick={(event) => event.stopPropagation()}>
+            <img src={photoUrl} alt="验收单照片大图" style={styles.photoLightboxImage} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 function excelDate(value) {
   if (!value) return "";
   const date = new Date(value);
@@ -133,6 +251,9 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
     const store = order.store || storeById.get(order.storeId);
     const storeName = store?.store_name || [order.city, order.mall].filter(Boolean).join("") || "";
     const quoteItems = orderQuoteItems(order);
+    const quoteDetails = quoteItems
+      .map((item) => `${item.label || ""} ${item.chargeUnit ?? ""}*${item.qty ?? ""}`)
+      .join("，");
     const clientQuoteTotal = orderChargeTotal(order);
     const expenseRecords = new Map();
     for (const record of order.expenseRecords || []) expenseRecords.set(record.id, record);
@@ -167,25 +288,12 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
       "师傅报价总和": technicianQuoteTotal,
       "保险费用": insuranceFeeTotal,
       "师傅是否结清": technicianSettlement,
+      "报价明细": quoteDetails,
       "甲方报价": clientQuoteTotal,
       "报价备注": order.quoteNote || "",
       "甲方是否结清": order.clientSettled ? "是" : "否",
       "利润": clientQuoteTotal - technicianQuoteTotal - insuranceFeeTotal,
     };
-  });
-  const details = [];
-  exportOrders.forEach((order) => {
-    orderQuoteItems(order).forEach((item) => {
-      const charge = lineCharge(item);
-      details.push({
-        "工单编号": order.ticketNo || "",
-        "品牌方": order.brand || "",
-        "项目": item.label || "",
-        "数量": item.qty ?? "",
-        "收费单价": item.chargeUnit ?? "",
-        "收费小计": charge,
-      });
-    });
   });
   const technicianDetails = [];
   exportOrders.forEach((order) => {
@@ -212,12 +320,10 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   });
   const workbook = XLSX.utils.book_new();
   const summarySheet = XLSX.utils.json_to_sheet(summary);
-  const detailSheet = XLSX.utils.json_to_sheet(details);
   const technicianDetailSheet = XLSX.utils.json_to_sheet(technicianDetails);
   formatExcelDates(summarySheet, ["报修时间", "完成时间", "创建时间"]);
   formatExcelDates(technicianDetailSheet, ["上门日期"]);
   XLSX.utils.book_append_sheet(workbook, summarySheet, "工单总表");
-  XLSX.utils.book_append_sheet(workbook, detailSheet, "报价明细");
   XLSX.utils.book_append_sheet(workbook, technicianDetailSheet, "师傅费用明细");
   const date = new Date().toISOString().slice(0, 10);
   XLSX.writeFile(workbook, `工单导出${filteredOnly ? "_当前筛选" : ""}_${date}.xlsx`);
@@ -1601,7 +1707,6 @@ function DetailPanel({
   const [expectedVisitSaveState, setExpectedVisitSaveState] = useState("");
   const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
-  const [inspectUrl, setInspectUrl] = useState(order.inspectionPhotoUrl || "");
   const [compareUrl, setCompareUrl] = useState(order.comparePhotoUrl || "");
   const [editingRelated, setEditingRelated] = useState(false);
 
@@ -1619,7 +1724,6 @@ function DetailPanel({
     setExpectedVisitSaveState("");
     setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
-    setInspectUrl(order.inspectionPhotoUrl || "");
     setCompareUrl(order.comparePhotoUrl || "");
     setEditingRelated(false);
   }, [order.id]);
@@ -2013,18 +2117,16 @@ function DetailPanel({
           {order.status === "已完成" && (
             <div style={styles.sectionBlock}>
               <div style={styles.sectionTitle}><Camera size={13} /> 验收管理</div>
-              <Field label="验工单照片链接（百度云）">
-                <input style={styles.input} value={inspectUrl} onChange={(e) => setInspectUrl(e.target.value)} placeholder="https://…" />
-              </Field>
+              <AcceptancePhotoUploader order={order} onPatch={onPatch} />
               <Field label="清洗前后对比照片链接（百度云）">
                 <input style={styles.input} value={compareUrl} onChange={(e) => setCompareUrl(e.target.value)} placeholder="https://…" />
               </Field>
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <button
                   style={styles.smallPrimaryBtn}
-                  onClick={() => onPatch({ inspectionPhotoUrl: inspectUrl.trim(), comparePhotoUrl: compareUrl.trim() })}
+                  onClick={() => onPatch({ comparePhotoUrl: compareUrl.trim() })}
                 >
-                  保存验收链接
+                  保存对比照片链接
                 </button>
               </div>
             </div>
@@ -2838,6 +2940,7 @@ const styles = {
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
   smallPrimaryBtn: { display: "flex", alignItems: "center", gap: 5, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 600 },
+  smallDangerBtn: { display: "flex", alignItems: "center", gap: 5, background: "#F3EAEA", color: "#A23931", border: "1px solid #D9B8B5", borderRadius: 7, padding: "6px 10px", fontSize: 12, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "9px 16px", fontSize: 13, fontWeight: 600 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 },
   successBar: { background: "#E4F3E9", color: "#2C6B45", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, marginBottom: 12 },
@@ -2886,6 +2989,17 @@ const styles = {
   panelBody: { flex: 1, overflowY: "auto", padding: 20 },
   sectionBlock: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 12, marginBottom: 14 },
   sectionTitle: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: "#145560", marginBottom: 10 },
+  acceptanceUploadBox: { border: "1px dashed #B8CCCA", borderRadius: 8, padding: 10, background: "#F9FBFA" },
+  acceptancePreviewButton: { display: "block", width: "100%", padding: 0, border: "none", background: "transparent", cursor: "zoom-in" },
+  acceptancePreview: { display: "block", width: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 6, background: "#EEF2F1", marginBottom: 8 },
+  acceptanceEmpty: { color: "#8FA1A8", fontSize: 12, padding: "22px 8px", textAlign: "center" },
+  acceptanceUploadActions: { display: "flex", alignItems: "center", gap: 8 },
+  acceptanceHint: { color: "#8FA1A8", fontSize: 11, marginTop: 8 },
+  acceptanceError: { color: "#A23931", background: "#F6E7E6", borderRadius: 6, padding: "6px 8px", fontSize: 11.5, marginTop: 8 },
+  photoLightbox: { position: "fixed", inset: 0, zIndex: 100, background: "rgba(10, 20, 24, 0.82)", display: "flex", alignItems: "center", justifyContent: "center", padding: 28 },
+  photoLightboxContent: { maxWidth: "min(92vw, 1200px)", maxHeight: "90vh", display: "flex", alignItems: "center", justifyContent: "center" },
+  photoLightboxImage: { display: "block", maxWidth: "100%", maxHeight: "90vh", objectFit: "contain", borderRadius: 8, boxShadow: "0 12px 40px rgba(0,0,0,0.35)" },
+  photoLightboxClose: { position: "absolute", top: 18, right: 20, width: 38, height: 38, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.45)", borderRadius: "50%", background: "rgba(0,0,0,0.35)", color: "#fff", cursor: "pointer" },
   relatedLinkChip: { display: "inline-flex", alignItems: "center", gap: 5, background: "#E3F0F1", color: "#145560", border: "1px solid #1F7A8C40", borderRadius: 20, padding: "5px 11px", fontSize: 11.5, fontWeight: 600 },
   moneyRow: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 },
   moneyChip: { fontSize: 11.5, fontWeight: 700, background: "#F4F7F6", color: "#4C6169", padding: "5px 10px", borderRadius: 20 },
