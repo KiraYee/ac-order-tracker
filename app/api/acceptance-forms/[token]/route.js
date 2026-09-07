@@ -12,7 +12,7 @@ export async function GET(request, { params }) {
     const filePath = form.status === "signed" ? form.signed_pdf_path : form.filled_pdf_path;
     const file = await supabase.storage.from("acceptance-forms").download(filePath);
     if (file.error) throw file.error;
-    return new NextResponse(file.data, { headers: { "Content-Type": "application/pdf", "Content-Disposition": "inline", "Cache-Control": "no-store", "X-Acceptance-Status": form.status } });
+    return new NextResponse(file.data, { headers: { "Content-Type": "application/pdf", "Content-Disposition": "inline", "Cache-Control": "no-store, no-cache, must-revalidate", Pragma: "no-cache", "X-Acceptance-Status": form.status, "X-Acceptance-Signed-At": form.signed_at || "" } });
   } catch (error) {
     return NextResponse.json({ error: error.message || "读取验收单失败" }, { status: 500 });
   }

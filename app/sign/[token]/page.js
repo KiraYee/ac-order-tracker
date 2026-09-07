@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Download, PenLine, RotateCcw, X } from "lucide-react";
-import { PDFDocument, rgb } from "pdf-lib";
-import fontkit from "@pdf-lib/fontkit";
+import { PDFDocument } from "pdf-lib";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf";
 
 pdfjsLib.GlobalWorkerOptions.workerSrc =
@@ -11,7 +10,6 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
 
 // Coordinates are in the real PDF's bottom-left coordinate system, not the old SVG system.
 const SIGNATURE_BOX = { x: 100, y: 110, maxW: 250, maxH: 26 };
-const TIME_FIELDS = { year: { x: 333, y: 96.264 }, month: { x: 388, y: 96.264 }, day: { x: 436, y: 96.264 } };
 
 function cropTransparentSignature(canvas) {
   const context = canvas.getContext("2d", { willReadFrequently: true });
@@ -61,8 +59,13 @@ export default function SignPage({ params }) {
       try {
         const response = await fetch(`/api/acceptance-forms/${encodeURIComponent(params.token)}`, { cache: "no-store" });
         if (!response.ok) throw new Error((await response.json()).error || "验收单不存在");
+        const acceptanceStatus = (response.headers.get("X-Acceptance-Status") || "").trim().toLowerCase();
+        if (acceptanceStatus !== "pending_signature" && acceptanceStatus !== "signed") {
+          throw new Error("验收单状态异常，请刷新页面后重试");
+        }
         sourcePdfRef.current = new Uint8Array(await response.arrayBuffer());
-        setStatus(response.headers.get("X-Acceptance-Status") || "pending_signature");
+        setView(acceptanceStatus === "signed" ? "done" : "document");
+        setStatus(acceptanceStatus);
       } catch (error) { setLoadError(error.message || "读取验收单失败"); setStatus("error"); }
     })();
   }, [params.token]);
@@ -122,15 +125,6 @@ export default function SignPage({ params }) {
     const scale = Math.min(SIGNATURE_BOX.maxW / signature.width, SIGNATURE_BOX.maxH / signature.height);
     page.drawImage(signature, { x: SIGNATURE_BOX.x, y: SIGNATURE_BOX.y, width: signature.width * scale, height: signature.height * scale });
 
-    // Clear the template's three separate date slots before writing the complete date.
-    page.drawRectangle({ x: 320, y: 87, width: 155, height: 18, color: rgb(1, 1, 1) });
-    const fullDate = `${moment.getFullYear()}年${moment.getMonth() + 1}月${moment.getDate()}日`;
-    pdf.registerFontkit(fontkit);
-    const fontResponse = await fetch("/NotoSerifSC-Regular.otf", { cache: "force-cache" });
-    if (!fontResponse.ok) throw new Error(`中文字体加载失败（HTTP ${fontResponse.status}）`);
-    const fontBytes = await fontResponse.arrayBuffer();
-    const bodyFont = await pdf.embedFont(fontBytes, { subset: true });
-    page.drawText(fullDate, { x: 322, y: 91, size: 12, font: bodyFont, color: rgb(0.10, 0.16, 0.13) });
     return pdf.save();
   }
 
@@ -151,10 +145,12 @@ export default function SignPage({ params }) {
       if (!saved.ok) {
         if (saved.status === 409) {
           const latest = await fetch(`/api/acceptance-forms/${encodeURIComponent(params.token)}`, { cache: "no-store" });
-          if (latest.ok) {
-            signedPdfRef.current = new Uint8Array(await latest.arrayBuffer());
-            setPreviewVersion((version) => version + 1);
+          const latestStatus = (latest.headers.get("X-Acceptance-Status") || "").trim().toLowerCase();
+          if (!latest.ok || latestStatus !== "signed") {
+            throw new Error("验收单已签署，但暂时无法读取签字版文件，请刷新后重试");
           }
+          signedPdfRef.current = new Uint8Array(await latest.arrayBuffer());
+          setPreviewVersion((version) => version + 1);
           setSignedNotice("⚠️ 该验收单已完成签字。本验收单已经完成签署，无需重复签署。");
           setShowSignature(false);
           setStatus("signed");
