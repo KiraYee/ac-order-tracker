@@ -12,6 +12,7 @@
     "@supabase/supabase-js": "^2.45.0",
     "lucide-react": "^0.383.0",
     "next": "14.2.5",
+    "pdf-lib": "^1.17.1",
     "pinyin-pro": "^3.29.3",
     "react": "^18",
     "react-dom": "^18",
