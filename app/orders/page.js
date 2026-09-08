@@ -3,7 +3,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import {
   Wrench, Phone, Clock, Plus, X,
   AlertTriangle, Search, Loader2, ClipboardList,
-  Pencil, Link2, DollarSign, Users, Trash2, CircleDollarSign, Camera,
+  Pencil, Link2, DollarSign, Users, Trash2, CircleDollarSign, Camera, FileText,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import { pinyin } from "pinyin-pro";
@@ -2118,6 +2118,14 @@ function DetailPanel({
             <div style={styles.sectionBlock}>
               <div style={styles.sectionTitle}><Camera size={13} /> 验收管理</div>
               <AcceptancePhotoUploader order={order} onPatch={onPatch} />
+              {order.acceptanceSignedPdfUrl && (
+                <div style={styles.signedPdfBox}>
+                  <FileText size={17} />
+                  <a href={order.acceptanceSignedPdfUrl} target="_blank" rel="noreferrer" style={styles.signedPdfLink}>
+                    查看已签字验收单
+                  </a>
+                </div>
+              )}
               <Field label="清洗前后对比照片链接（百度云）">
                 <input style={styles.input} value={compareUrl} onChange={(e) => setCompareUrl(e.target.value)} placeholder="https://…" />
               </Field>
@@ -2990,6 +2998,8 @@ const styles = {
   sectionBlock: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 12, marginBottom: 14 },
   sectionTitle: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: "#145560", marginBottom: 10 },
   acceptanceUploadBox: { border: "1px dashed #B8CCCA", borderRadius: 8, padding: 10, background: "#F9FBFA" },
+  signedPdfBox: { display: "flex", alignItems: "center", gap: 7, marginTop: 10, padding: "9px 10px", border: "1px solid #D7E5E3", borderRadius: 8, background: "#F4F9F8", color: "#145560" },
+  signedPdfLink: { color: "#145560", fontSize: 12.5, fontWeight: 600, textDecoration: "none" },
   acceptancePreviewButton: { display: "block", width: "100%", padding: 0, border: "none", background: "transparent", cursor: "zoom-in" },
   acceptancePreview: { display: "block", width: "100%", maxHeight: 220, objectFit: "contain", borderRadius: 6, background: "#EEF2F1", marginBottom: 8 },
   acceptanceEmpty: { color: "#8FA1A8", fontSize: 12, padding: "22px 8px", textAlign: "center" },

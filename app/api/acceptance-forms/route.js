@@ -15,17 +15,24 @@ export async function POST(request) {
     if (!(request.headers.get("content-type") || "").includes("multipart/form-data")) return NextResponse.json({ error: "请求格式必须是 multipart/form-data" }, { status: 400 });
     const formData = await request.formData();
     const file = formData.get("file");
+    const orderId = String(formData.get("order_id") || "").trim();
+    if (!orderId) return NextResponse.json({ error: "请选择已完成工单" }, { status: 400 });
     if (!(file instanceof File)) return NextResponse.json({ error: "请上传 PDF 文件" }, { status: 400 });
     if (file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "PDF 文件不能超过 20MB" }, { status: 413 });
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return NextResponse.json({ error: "只能上传 PDF 文件" }, { status: 400 });
     const header = Buffer.from(await file.slice(0, 5).arrayBuffer()).toString("ascii");
     if (header !== "%PDF-") return NextResponse.json({ error: "上传文件不是有效 PDF" }, { status: 400 });
     const supabase = createAdminClient();
+    const { data: order, error: orderError } = await supabase.from("orders").select("id, status").eq("id", orderId).maybeSingle();
+    if (orderError) throw orderError;
+    if (!order) return NextResponse.json({ error: "关联工单不存在" }, { status: 400 });
+    if (order.status !== "已完成") return NextResponse.json({ error: "只能为已完成工单创建验收单" }, { status: 400 });
     let token = makeToken();
     let path = `filled/${token}.pdf`;
     let row;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await supabase.from("acceptance_forms").insert({
+        order_id: orderId,
         token,
         filled_pdf_path: path,
         status: "pending_signature",

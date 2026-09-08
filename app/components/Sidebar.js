@@ -8,7 +8,7 @@ const NAV_ITEMS = [
   { key: "technicians", href: "/technicians", label: "师傅", icon: Users },
   { key: "stores", href: "/stores", label: "门店", icon: Store },
   { key: "finance", href: "/finance", label: "财务", icon: Wallet },
-  { key: "acceptance", href: "/sign/create", label: "电子验收单", icon: FileSignature },
+  { key: "acceptance", href: "/sign/records", label: "电子验收单", icon: FileSignature },
 ];
 
 export default function Sidebar({ active, userEmail, onSignOut }) {
