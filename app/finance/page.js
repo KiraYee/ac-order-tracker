@@ -50,10 +50,15 @@ function FinanceView({ userEmail }) {
       ...(order.visits || []).flatMap((visit) => visit.expenseRecords || []),
     ]);
     const expense = expenseRecords.find((record) => record.id === expenseId);
-    if (!expense) return;
-    if (expense.type === "technician_fee") {
+    if (expense?.type === "technician_fee") {
       setTab("payable");
       setTargetRowId(`expense-${expenseId}`);
+    } else {
+      const advance = advances.find((item) => item.expense_record_id === expenseId);
+      if (advance) {
+        setTab("advances");
+        setTargetRowId(`advance-${advance.id}`);
+      }
     }
   }, [searchParams, orders, advances, loading]);
 

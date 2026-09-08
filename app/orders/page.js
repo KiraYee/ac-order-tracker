@@ -552,6 +552,7 @@ function OrdersView({ userEmail }) {
   const [draftEndDate, setDraftEndDate] = useState("");
   const [draftMonth, setDraftMonth] = useState("");
   const [visitFormMode, setVisitFormMode] = useState(null);
+  const [lockedVisitNotice, setLockedVisitNotice] = useState(null);
   const [now, setNow] = useState(() => Date.now());
   const [closedOpen, setClosedOpen] = useState(false);
   const router = useRouter();
@@ -560,12 +561,14 @@ function OrdersView({ userEmail }) {
   function openOrder(orderId) {
     setSelectedId(orderId);
     setVisitFormMode(null);
+    setLockedVisitNotice(null);
     router.push(`/orders?open=${encodeURIComponent(orderId)}`);
   }
 
   function closeOrder() {
     setSelectedId(null);
     setVisitFormMode(null);
+    setLockedVisitNotice(null);
     router.replace("/orders");
   }
 
@@ -881,6 +884,7 @@ function OrdersView({ userEmail }) {
           notes: data.notes || null,
           report_time: reportTime,
           expected_visit_time: data.expectedVisitTime || null,
+          expected_visit_pending: !!data.expectedVisitPending,
           status: data.status || "待核实",
           pending_assignment_at: data.status === "待派工" ? new Date().toISOString() : null,
           pending_visit_at: data.status === "待上门" ? new Date().toISOString() : null,
@@ -1017,7 +1021,12 @@ function OrdersView({ userEmail }) {
       if (nextStatus === "已完成" && !order?.completedAt) {
         completionPatch.completed_at = new Date().toISOString();
       }
-      await supabase.from("orders").update(completionPatch).eq("id", orderId);
+      const { error: completionError } = await supabase.from("orders").update({
+        ...completionPatch,
+        expected_visit_time: null,
+        expected_visit_pending: false,
+      }).eq("id", orderId);
+      if (completionError) throw completionError;
 
       const newVisit = { ...visitFromDb(row), expenseRecords };
       setOrders((prev) =>
@@ -1029,6 +1038,8 @@ function OrdersView({ userEmail }) {
                 inProgressAt: completionPatch.in_progress_at,
                 completedAt: nextStatus === "已完成" && !o.completedAt ? completionPatch.completed_at : o.completedAt,
                 updatedAt: completionPatch.updated_at,
+                expectedVisitTime: null,
+                expectedVisitPending: false,
                 visits: [...o.visits, newVisit],
               }
             : o
@@ -1428,6 +1439,7 @@ function OrdersView({ userEmail }) {
           stores={stores}
           cities={cities}
           employees={employees}
+          advances={advances}
           onClose={closeOrder}
           onNavigateToOrder={openOrder}
           onUpdateStatus={(status, expectedVisitTime) => updateStatus(selected.id, status, expectedVisitTime)}
@@ -1443,15 +1455,18 @@ function OrdersView({ userEmail }) {
           onDeleteFeePreset={deleteFeePreset}
           onToggleClientSettled={() => toggleClientSettled(selected)}
           visitFormMode={visitFormMode}
-          onOpenNewVisit={() => setVisitFormMode("new")}
+          lockedVisitNotice={lockedVisitNotice}
+          onOpenNewVisit={() => { setLockedVisitNotice(null); setVisitFormMode("new"); }}
           onOpenEditVisit={(v) => {
             if (visitHasLockedExpenses(v)) {
-              setErrorMsg(lockedVisitMessage());
+              setLockedVisitNotice(v);
+              setVisitFormMode(null);
               return;
             }
+            setLockedVisitNotice(null);
             setVisitFormMode(v);
           }}
-          onCancelVisitForm={() => setVisitFormMode(null)}
+          onCancelVisitForm={() => { setLockedVisitNotice(null); setVisitFormMode(null); }}
           onAddVisit={(v) => addVisit(selected.id, v)}
           onUpdateVisit={(visitId, v) => updateVisit(selected.id, visitId, v)}
           onDeleteVisit={(visitId) => deleteVisit(selected.id, visitId)}
@@ -1712,11 +1727,37 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
   );
 }
 
+function LockedVisitNotice({ visit, advances = [] }) {
+  const lockedExpenses = (visit?.expenseRecords || []).filter((record) => (
+    record.isSettled === true || record.advanceReimbursed === true
+  ));
+  const advanceByExpenseId = new Map((advances || []).map((advance) => [advance.expense_record_id, advance]));
+  return (
+    <div style={styles.lockedVisitNotice}>
+      <div style={styles.lockedVisitNoticeTitle}><AlertTriangle size={14} /> 该上门记录存在已结算或已报销的支出，请先撤销这些支出的结算状态后再编辑</div>
+      <div style={styles.lockedVisitNoticeHint}>请点击下面的费用，前往财务页撤销结算或撤销报销：</div>
+      <div style={styles.lockedVisitExpenseList}>
+        {lockedExpenses.map((record) => {
+          const advance = advanceByExpenseId.get(record.id);
+          const href = `/finance?tab=payable&open_expense=${encodeURIComponent(record.id)}`;
+          return (
+            <Link key={record.id} href={href} style={styles.lockedVisitExpenseLink}>
+              <span>{record.label || "未命名支出"}</span>
+              <strong>¥{Number(record.amount) || 0}</strong>
+              <span>{record.paymentMethod === "advance" ? `垫付${advance?.employee_name ? ` · ${advance.employee_name}` : ""} · 去师傅费用结算撤销报销` : "师傅费用 · 撤销结算"}</span>
+            </Link>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DetailPanel({
-  order, orders, technicians, feePresets, technicianFeePresets = [], clients, cities, employees, stores,
+  order, orders, technicians, feePresets, technicianFeePresets = [], clients, cities, employees, stores, advances = [],
   onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
   onAddFeePreset, onDeleteFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
-  visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm,
+  visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm, lockedVisitNotice,
   onAddVisit, onUpdateVisit, onDeleteVisit,
   onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense,
   onExpenseRecordsChange,
@@ -1741,6 +1782,7 @@ function DetailPanel({
   const [notes, setNotes] = useState(order.notes || "");
   const [reportTime, setReportTime] = useState(() => toDateTimeLocal(order.reportTime));
   const [expectedVisitTime, setExpectedVisitTime] = useState(() => toDateTimeLocal(order.expectedVisitTime));
+  const [expectedVisitPending, setExpectedVisitPending] = useState(order.expectedVisitPending === true);
   const [expectedVisitSaveState, setExpectedVisitSaveState] = useState("");
   const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
@@ -1758,6 +1800,7 @@ function DetailPanel({
     setNotes(order.notes || "");
     setReportTime(toDateTimeLocal(order.reportTime));
     setExpectedVisitTime(toDateTimeLocal(order.expectedVisitTime));
+    setExpectedVisitPending(order.expectedVisitPending === true);
     setExpectedVisitSaveState("");
     setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
@@ -1774,10 +1817,10 @@ function DetailPanel({
     await onUpdateStatus(nextStatus, savedExpectedTime);
   }
 
-  async function saveExpectedVisitTime() {
-    const value = expectedVisitTime ? new Date(expectedVisitTime).toISOString() : null;
+  async function saveExpectedVisitTime(pendingOverride = expectedVisitPending, timeOverride = expectedVisitTime) {
+    const value = pendingOverride ? null : (timeOverride ? new Date(timeOverride).toISOString() : null);
     setExpectedVisitSaveState("saving");
-    const saved = await onPatch({ expectedVisitTime: value });
+    const saved = await onPatch({ expectedVisitTime: value, expectedVisitPending: pendingOverride });
     if (saved) {
       setExpectedVisitSaveState("saved");
       window.setTimeout(() => setExpectedVisitSaveState(""), 2200);
@@ -1962,6 +2005,7 @@ function DetailPanel({
 
           <div style={styles.sectionBlock}>
             <div style={styles.sectionTitle}>当前状态 / 上门记录</div>
+              {lockedVisitNotice && <LockedVisitNotice visit={lockedVisitNotice} advances={advances} />}
             <div style={styles.statusRow}>
               <div style={styles.sectionLabel}>当前状态</div>
               <div style={styles.statusPills}>
@@ -1984,13 +2028,27 @@ function DetailPanel({
             {statusHint && <div style={styles.formErr}>{statusHint}</div>}
             {(order.status === "待上门" || statusHint) && (
               <Field label="预计上门时间">
-                <input
-                  style={styles.input}
-                  type="datetime-local"
-                  value={expectedVisitTime}
-                  onChange={(e) => setExpectedVisitTime(e.target.value)}
-                  onBlur={saveExpectedVisitTime}
-                />
+                <div style={styles.expectedVisitRow}>
+                  <input
+                    style={{ ...styles.input, ...(expectedVisitPending ? styles.expectedVisitDisabled : {}) }}
+                    type="datetime-local"
+                    value={expectedVisitTime}
+                    disabled={expectedVisitPending}
+                    onChange={(e) => setExpectedVisitTime(e.target.value)}
+                    onBlur={saveExpectedVisitTime}
+                  />
+                  <label style={{ ...styles.expectedVisitPendingLabel, ...(expectedVisitPending ? styles.expectedVisitPendingLabelOn : {}) }}>
+                    <input type="checkbox" checked={expectedVisitPending} onChange={(e) => {
+                      const next = e.target.checked;
+                      setExpectedVisitPending(next);
+                      const nextTime = next ? "" : expectedVisitTime;
+                      if (next) setExpectedVisitTime("");
+                      window.setTimeout(() => saveExpectedVisitTime(next, nextTime), 0);
+                    }} />
+                    时间待定
+                  </label>
+                </div>
+                {expectedVisitPending && <div style={styles.expectedVisitPendingHint}>尚未确定具体上门时间</div>}
                 {expectedVisitSaveState === "saving" && <div style={styles.saveStateHint}>保存中…</div>}
                 {expectedVisitSaveState === "saved" && <div style={styles.saveStateSuccess}>已保存 ✓</div>}
                 {expectedVisitSaveState === "error" && <div style={styles.saveStateError}>保存失败，请重试</div>}
@@ -2076,6 +2134,23 @@ function DetailPanel({
                           <div style={styles.timelineMaster}><Wrench size={12} /> {v.master}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
                           <div style={styles.serviceRecordMeta}>服务类型：{v.serviceType || "历史上门记录"}</div>
                           {expenseTotal > 0 && <div style={styles.serviceRecordCost}>本次支出：¥{expenseTotal}</div>}
+                          {(v.expenseRecords || []).length > 0 && (
+                            <div style={styles.visitExpenseDetails}>
+                              {(v.expenseRecords || []).map((record) => {
+                                const meta = expenseSettlementMeta(record);
+                                const locked = record.isSettled === true || record.advanceReimbursed === true;
+                                const href = `/finance?tab=payable&open_expense=${encodeURIComponent(record.id)}`;
+                                return (
+                                  <div key={record.id || `${record.label}-${record.amount}`} style={styles.visitExpenseDetailRow}>
+                                    <span style={styles.visitExpenseDetailName}>{record.label || "未命名支出"}</span>
+                                    <span>{Number(record.qty) || 0}×¥{Number(record.unitPrice) || 0}=¥{Number(record.amount) || 0}</span>
+                                    <span style={{ color: meta.color, fontWeight: 700 }}>{meta.label || "未结算"}</span>
+                                    {locked && record.id && <Link href={href} style={styles.expenseFinanceLink} onClick={(event) => event.stopPropagation()}>{record.paymentMethod === "advance" ? "去师傅费用结算" : "去师傅结算"}</Link>}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                           {v.note && <div style={styles.timelineNote}>{v.note}</div>}
                           <div style={styles.timelineBy}>登记人：{v.createdBy || "—"}</div>
                           {isEditing && (
@@ -2777,6 +2852,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
   const [assignedTechnicianId, setAssignedTechnicianId] = useState(null);
   const [status, setStatus] = useState("待核实");
   const [expectedVisitTime, setExpectedVisitTime] = useState("");
+  const [expectedVisitPending, setExpectedVisitPending] = useState(false);
   const [clientId, setClientId] = useState("");
   const [followerId, setFollowerId] = useState("");
   const [contactName, setContactName] = useState("");
@@ -2831,6 +2907,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       assignedTechnicianId,
       status,
       expectedVisitTime: expectedVisitTime ? new Date(expectedVisitTime).toISOString() : null,
+      expectedVisitPending,
       clientId: clientId || null,
       followerId: followerId || null,
       contactName: contactName.trim(),
@@ -2948,12 +3025,23 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
           </Field>
           {(status === "待派工" || status === "待上门") && (
             <Field label="预计上门时间">
-              <input
-                style={styles.input}
-                type="datetime-local"
-                value={expectedVisitTime}
-                onChange={(e) => setExpectedVisitTime(e.target.value)}
-              />
+              <div style={styles.expectedVisitRow}>
+                <input
+                  style={{ ...styles.input, ...(expectedVisitPending ? styles.expectedVisitDisabled : {}) }}
+                  type="datetime-local"
+                  value={expectedVisitTime}
+                  disabled={expectedVisitPending}
+                  onChange={(e) => setExpectedVisitTime(e.target.value)}
+                />
+                <label style={{ ...styles.expectedVisitPendingLabel, ...(expectedVisitPending ? styles.expectedVisitPendingLabelOn : {}) }}>
+                  <input type="checkbox" checked={expectedVisitPending} onChange={(e) => {
+                    setExpectedVisitPending(e.target.checked);
+                    if (e.target.checked) setExpectedVisitTime("");
+                  }} />
+                  时间待定
+                </label>
+              </div>
+              {expectedVisitPending && <div style={styles.expectedVisitPendingHint}>尚未确定具体上门时间</div>}
             </Field>
           )}
           <Field label="备注（选填）">
@@ -2988,6 +3076,11 @@ const styles = {
   timeFilterField: { display: "flex", flexDirection: "column", gap: 5, marginBottom: 10, color: "#4C6169", fontSize: 11.5, fontWeight: 600 },
   exportMonthInput: { width: "100%", border: "1px solid #E2E9E8", borderRadius: 6, padding: "6px 7px", background: "#F4F7F6", color: "#16262B", fontSize: 12, marginBottom: 10 },
   timeFilterActions: { display: "flex", justifyContent: "flex-end", gap: 6, marginTop: 4 },
+  expectedVisitRow: { display: "flex", alignItems: "center", gap: 8 },
+  expectedVisitDisabled: { background: "#EEF2F1", color: "#8FA1A8", cursor: "not-allowed" },
+  expectedVisitPendingLabel: { display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap", color: "#718087", background: "#F4F7F6", border: "1px solid #D7E1DF", borderRadius: 7, padding: "7px 9px", fontSize: 12, fontWeight: 600 },
+  expectedVisitPendingLabelOn: { color: "#8A6A0F", background: "#FBF2D9", borderColor: "#C99A1D88" },
+  expectedVisitPendingHint: { color: "#8A6A0F", background: "#FBF2D9", borderRadius: 6, padding: "5px 7px", marginTop: 5, fontSize: 11.5 },
   title: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22 },
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "9px 14px", fontSize: 13, fontWeight: 600 },
@@ -3086,6 +3179,11 @@ const styles = {
   timelineHeader: { display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 },
   emptyVisits: { fontSize: 12.5, color: "#8FA1A8", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 9, padding: 16, textAlign: "center" },
   warningHint: { color: "#A5661A", background: "#FBEEDD", borderRadius: 7, padding: "6px 8px", marginTop: 6, fontSize: 11.5 },
+  lockedVisitNotice: { color: "#8F3028", background: "#FBE7E5", border: "1px solid #D9631F66", borderRadius: 8, padding: "10px 11px", marginBottom: 12, fontSize: 12, lineHeight: 1.55 },
+  lockedVisitNoticeTitle: { display: "flex", alignItems: "flex-start", gap: 6, fontWeight: 700 },
+  lockedVisitNoticeHint: { marginTop: 5, color: "#7A5A16" },
+  lockedVisitExpenseList: { display: "flex", flexDirection: "column", gap: 5, marginTop: 7 },
+  lockedVisitExpenseLink: { display: "grid", gridTemplateColumns: "1fr auto 1.2fr", gap: 8, alignItems: "center", color: "#145560", background: "#fff", border: "1px solid #E2C1B9", borderRadius: 6, padding: "6px 8px", textDecoration: "none" },
   timeline: { display: "flex", flexDirection: "column" },
   timelineItem: { display: "flex", gap: 12 },
   timelineRail: { display: "flex", flexDirection: "column", alignItems: "center" },
@@ -3098,6 +3196,9 @@ const styles = {
   serviceRecordMeta: { fontSize: 11.5, color: "#4C6169", marginTop: 5 },
   serviceRecordContent: { fontSize: 12, color: "#16262B", lineHeight: 1.45, marginTop: 4 },
   serviceRecordCost: { display: "inline-block", fontSize: 11.5, fontWeight: 700, color: "#A5661A", background: "#FBEEDD", borderRadius: 6, padding: "4px 7px", marginTop: 5 },
+  visitExpenseDetails: { display: "flex", flexDirection: "column", gap: 4, marginTop: 7, background: "#F9FAFA", border: "1px solid #E2E9E8", borderRadius: 7, padding: "6px 8px" },
+  visitExpenseDetailRow: { display: "grid", gridTemplateColumns: "1fr auto auto auto", gap: 8, alignItems: "center", fontSize: 11.5, color: "#4C6169", padding: "3px 0", borderBottom: "1px solid #F0F3F2" },
+  visitExpenseDetailName: { color: "#16262B", fontWeight: 600, minWidth: 0 },
   timelineNote: { fontSize: 12.5, color: "#16262B", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, padding: 8, marginTop: 6, lineHeight: 1.5 },
   timelineBy: { fontSize: 10.5, color: "#B7C4C2", marginTop: 5 },
   visitForm: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 14, marginBottom: 16 },
