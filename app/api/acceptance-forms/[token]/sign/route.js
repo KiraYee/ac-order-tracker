@@ -11,7 +11,7 @@ export async function POST(request, { params }) {
     const file = formData.get("file");
     if (!(file instanceof File)) return NextResponse.json({ error: "缺少签字 PDF" }, { status: 400 });
     const supabase = createAdminClient();
-    const { data: current, error: findError } = await supabase.from("acceptance_forms").select("id, status, order_id").eq("token", params.token).maybeSingle();
+    const { data: current, error: findError } = await supabase.from("acceptance_forms").select("id, status, order_id, signature_x_ratio, signature_y_ratio, signature_width_ratio").eq("token", params.token).maybeSingle();
     if (findError) throw findError;
     if (!current) return NextResponse.json({ error: "验收单不存在" }, { status: 404 });
     if (current.status !== "pending_signature") return NextResponse.json({ error: "该验收单已完成签字", status: current.status }, { status: 409 });

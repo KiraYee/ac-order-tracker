@@ -46,6 +46,7 @@ export default function SignPage({ params }) {
   const [signError, setSignError] = useState("");
   const [signedNotice, setSignedNotice] = useState("");
   const [previewVersion, setPreviewVersion] = useState(0);
+  const [signaturePosition, setSignaturePosition] = useState(null);
   const padRef = useRef(null);
   const previewRef = useRef(null);
   const wrapRef = useRef(null);
@@ -64,6 +65,14 @@ export default function SignPage({ params }) {
           throw new Error("验收单状态异常，请刷新页面后重试");
         }
         sourcePdfRef.current = new Uint8Array(await response.arrayBuffer());
+        const xRatio = Number(response.headers.get("X-Signature-X-Ratio"));
+        const yRatio = Number(response.headers.get("X-Signature-Y-Ratio"));
+        const widthRatio = Number(response.headers.get("X-Signature-Width-Ratio"));
+        setSignaturePosition(
+          Number.isFinite(xRatio) && Number.isFinite(yRatio)
+            ? { xRatio, yRatio, widthRatio: Number.isFinite(widthRatio) ? widthRatio : 0.34 }
+            : null
+        );
         setView(acceptanceStatus === "signed" ? "done" : "document");
         setStatus(acceptanceStatus);
       } catch (error) { setLoadError(error.message || "读取验收单失败"); setStatus("error"); }
@@ -122,8 +131,16 @@ export default function SignPage({ params }) {
     const page = pdf.getPage(0);
     const signatureBytes = await (await fetch(signatureUrl)).arrayBuffer();
     const signature = await pdf.embedPng(signatureBytes);
-    const scale = Math.min(SIGNATURE_BOX.maxW / signature.width, SIGNATURE_BOX.maxH / signature.height);
-    page.drawImage(signature, { x: SIGNATURE_BOX.x, y: SIGNATURE_BOX.y, width: signature.width * scale, height: signature.height * scale });
+    const pageSize = page.getSize();
+    const position = signaturePosition;
+    const scale = position
+      ? Math.min((position.widthRatio * pageSize.width) / signature.width, SIGNATURE_BOX.maxH / signature.height)
+      : Math.min(SIGNATURE_BOX.maxW / signature.width, SIGNATURE_BOX.maxH / signature.height);
+    const width = signature.width * scale;
+    const height = signature.height * scale;
+    const x = position ? position.xRatio * pageSize.width : SIGNATURE_BOX.x;
+    const y = position ? pageSize.height - position.yRatio * pageSize.height - height : SIGNATURE_BOX.y;
+    page.drawImage(signature, { x, y, width, height });
 
     return pdf.save();
   }

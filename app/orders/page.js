@@ -41,6 +41,16 @@ function formatExpectedVisitTime(iso) {
   return `${date.getMonth() + 1}月${date.getDate()}日 ${String(date.getHours()).padStart(2, "0")}::${String(date.getMinutes()).padStart(2, "0")}`.replace("::", ":");
 }
 
+function visitHasLockedExpenses(visit) {
+  return (visit?.expenseRecords || []).some((record) => (
+    record.isSettled === true || record.advanceReimbursed === true
+  ));
+}
+
+function lockedVisitMessage() {
+  return "该上门记录存在已结算或已报销的支出，请先核销这笔上门记录相关的支出后再编辑。";
+}
+
 function acceptancePhotoPath(orderId, fileName) {
   return `${orderId}/${fileName}`;
 }
@@ -1033,6 +1043,19 @@ function OrdersView({ userEmail }) {
 
   async function updateVisit(orderId, visitId, visit) {
     try {
+      const previousVisit = orders.flatMap((item) => item.visits || []).find((item) => item.id === visitId);
+      const { data: currentExpenseRows, error: currentExpenseError } = await supabase.from("expense_records").select("*").eq("visit_id", visitId);
+      if (currentExpenseError) throw currentExpenseError;
+      const currentExpenses = (currentExpenseRows || []).map(expenseRecordFromDb);
+      const advanceIds = currentExpenses.filter((record) => record.paymentMethod === "advance").map((record) => record.id);
+      let advanceByExpenseId = new Map();
+      if (advanceIds.length > 0) {
+        const { data: advanceRows, error: advanceError } = await supabase.from("advances").select("expense_record_id, reimbursed").in("expense_record_id", advanceIds);
+        if (advanceError) throw advanceError;
+        advanceByExpenseId = new Map((advanceRows || []).map((row) => [row.expense_record_id, row.reimbursed === true]));
+      }
+      const lockedExpenses = currentExpenses.map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) === true })).filter((record) => record.isSettled === true || record.advanceReimbursed === true);
+      if (lockedExpenses.length > 0 || visitHasLockedExpenses(previousVisit)) throw new Error(lockedVisitMessage());
       const { error } = await supabase
         .from("visits")
         .update({
@@ -1046,9 +1069,15 @@ function OrdersView({ userEmail }) {
         })
         .eq("id", visitId);
       if (error) throw error;
-      const previousVisit = orders.flatMap((item) => item.visits || []).find((item) => item.id === visitId);
-      await Promise.all((previousVisit?.expenseRecords || []).map((record) => deleteExpenseRecord(record.id)));
-      const expenseRecords = await saveExpenseRecords(visitId, visit.expenseRecords || [], orderId);
+      const existingIds = new Set(currentExpenses.map((record) => record.id));
+      const nextRecords = visit.expenseRecords || [];
+      const removedIds = currentExpenses.filter((record) => !nextRecords.some((next) => next.id === record.id)).map((record) => record.id);
+      await Promise.all(removedIds.map((id) => deleteExpenseRecord(id)));
+      const changedRecords = nextRecords.filter((record) => existingIds.has(record.id));
+      const newRecords = nextRecords.filter((record) => !existingIds.has(record.id));
+      const updatedRecords = await Promise.all(changedRecords.map((record) => updateExpenseRecord(record.id, record)));
+      const insertedRecords = await saveExpenseRecords(visitId, newRecords, orderId);
+      const expenseRecords = [...updatedRecords, ...insertedRecords];
       await fetchTechnicianFeePresets();
       setOrders((prev) =>
         prev.map((o) =>
@@ -1100,6 +1129,8 @@ function OrdersView({ userEmail }) {
 
   async function deleteVisit(orderId, visitId) {
     try {
+      const visit = orders.flatMap((item) => item.visits || []).find((item) => item.id === visitId);
+      if (visitHasLockedExpenses(visit)) throw new Error(lockedVisitMessage());
       // 不依赖数据库外键是否配置了 ON DELETE CASCADE：先显式清理本次上门关联的费用。
       const { error: expensesError } = await supabase
         .from("expense_records")
@@ -1413,7 +1444,13 @@ function OrdersView({ userEmail }) {
           onToggleClientSettled={() => toggleClientSettled(selected)}
           visitFormMode={visitFormMode}
           onOpenNewVisit={() => setVisitFormMode("new")}
-          onOpenEditVisit={(v) => setVisitFormMode(v)}
+          onOpenEditVisit={(v) => {
+            if (visitHasLockedExpenses(v)) {
+              setErrorMsg(lockedVisitMessage());
+              return;
+            }
+            setVisitFormMode(v);
+          }}
           onCancelVisitForm={() => setVisitFormMode(null)}
           onAddVisit={(v) => addVisit(selected.id, v)}
           onUpdateVisit={(visitId, v) => updateVisit(selected.id, visitId, v)}
@@ -2016,15 +2053,22 @@ function DetailPanel({
                           <div style={{ ...styles.timelineNode, borderColor: m.color }} />
                           {idx < order.visits.length - 1 && <div style={styles.timelineLine} />}
                         </div>
-                        <div style={styles.timelineContent}>
+                        <div
+                          style={{ ...styles.timelineContent, cursor: isEditing ? "default" : "pointer" }}
+                          onClick={() => { if (!isEditing) onOpenEditVisit(v); }}
+                        >
                           <div style={styles.timelineTop}>
                             <span style={{ color: m.color, fontWeight: 600 }}>第{idx + 1}次 · {m.label}</span>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               <span style={styles.timelineDate}>{fmtDate(v.visitTime)}</span>
                               {!isEditing && (
                                 <>
-                                  <button style={styles.tinyIconBtn} onClick={() => onOpenEditVisit(v)} title="编辑"><Pencil size={12} /></button>
-                                  <button style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={() => { if (window.confirm("确定删除这条上门记录吗？")) onDeleteVisit(v.id); }} title="删除"><Trash2 size={12} /></button>
+                                  <button style={styles.tinyIconBtn} onClick={(event) => { event.stopPropagation(); onOpenEditVisit(v); }} title="编辑"><Pencil size={12} /></button>
+                                  <button style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={(event) => {
+                                    event.stopPropagation();
+                                    if (visitHasLockedExpenses(v)) { window.alert(lockedVisitMessage()); return; }
+                                    if (window.confirm("确定删除这条上门记录吗？")) onDeleteVisit(v.id);
+                                  }} title="删除"><Trash2 size={12} /></button>
                                 </>
                               )}
                             </div>

@@ -16,7 +16,16 @@ export async function POST(request) {
     const formData = await request.formData();
     const file = formData.get("file");
     const orderId = String(formData.get("order_id") || "").trim();
+    const xRatioValue = formData.get("signature_x_ratio");
+    const yRatioValue = formData.get("signature_y_ratio");
+    const widthRatioValue = formData.get("signature_width_ratio") ?? "0.34";
     if (!orderId) return NextResponse.json({ error: "请选择已完成工单" }, { status: 400 });
+    const xRatio = Number(xRatioValue);
+    const yRatio = Number(yRatioValue);
+    const widthRatio = Number(widthRatioValue);
+    if (!Number.isFinite(xRatio) || xRatio < 0 || xRatio > 1 || !Number.isFinite(yRatio) || yRatio < 0 || yRatio > 1 || !Number.isFinite(widthRatio) || widthRatio <= 0 || widthRatio > 1) {
+      return NextResponse.json({ error: "请选择有效的签字位置" }, { status: 400 });
+    }
     if (!(file instanceof File)) return NextResponse.json({ error: "请上传 PDF 文件" }, { status: 400 });
     if (file.size > MAX_FILE_SIZE) return NextResponse.json({ error: "PDF 文件不能超过 20MB" }, { status: 413 });
     if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) return NextResponse.json({ error: "只能上传 PDF 文件" }, { status: 400 });
@@ -33,6 +42,9 @@ export async function POST(request) {
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const result = await supabase.from("acceptance_forms").insert({
         order_id: orderId,
+        signature_x_ratio: xRatio,
+        signature_y_ratio: yRatio,
+        signature_width_ratio: widthRatio,
         token,
         filled_pdf_path: path,
         status: "pending_signature",
