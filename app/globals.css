@@ -284,6 +284,8 @@ textarea {
 .acceptance-record-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .acceptance-record-actions button { display: inline-flex; align-items: center; gap: 4px; padding: 6px 9px; border: 1px solid #e2e9e8; border-radius: 7px; background: #f8faf9; color: #4c6169; font: inherit; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .acceptance-record-actions button:hover:not(:disabled) { border-color: #9bbab5; background: #e3f0f1; color: #145560; }
+.acceptance-record-actions .acceptance-delete-button { color: #a23931; border-color: #e5c6c3; background: #fff8f7; }
+.acceptance-record-actions .acceptance-delete-button:hover:not(:disabled) { border-color: #c87870; background: #f6e7e6; color: #8a2d26; }
 .acceptance-record-actions button:disabled { cursor: not-allowed; opacity: .45; }
 .acceptance-records-state { min-height: 220px; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed #d5e0de; border-radius: 12px; color: #8fa1a8; font-size: 13px; }
 .acceptance-records-state a { color: #1f7a8c; font-weight: 600; text-decoration: none; }
