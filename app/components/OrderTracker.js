@@ -1025,7 +1025,6 @@ function VisitForm({
   feePresets, onAddFeePreset, onUpdateFeePreset, onDeleteFeePreset,
 }) {
   const [technician, setTechnician] = useState(null);
-  const [masterPhone, setMasterPhone] = useState("");
   const [visitTime, setVisitTime] = useState(() => {
     const now = new Date();
     now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
@@ -1043,7 +1042,6 @@ function VisitForm({
     }
     onSubmit({
       master: technician.name,
-      masterPhone: masterPhone.trim(),
       visitTime: new Date(visitTime).toISOString(),
       resultType,
       note: note.trim(),
@@ -1060,17 +1058,8 @@ function VisitForm({
             valueId={technician?.id}
             onSelect={(t) => {
               setTechnician(t);
-              setMasterPhone(t?.phone || "");
             }}
             onAddTechnician={onAddTechnician}
-          />
-        </Field>
-        <Field label="师傅电话">
-          <input
-            style={styles.input}
-            value={masterPhone}
-            onChange={(e) => setMasterPhone(e.target.value)}
-            placeholder="选填"
           />
         </Field>
       </div>

@@ -989,7 +989,6 @@ function OrdersView({ userEmail }) {
           visit_time: visit.visitTime,
           service_type: visit.serviceType || null,
           master: visit.master,
-          master_phone: visit.masterPhone || null,
           technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
@@ -1073,7 +1072,6 @@ function OrdersView({ userEmail }) {
           visit_time: visit.visitTime,
           service_type: visit.serviceType || null,
           master: visit.master,
-          master_phone: visit.masterPhone || null,
           technician_id: visit.technicianId || null,
           result_type: visit.resultType,
           note: visit.note || null,
@@ -2035,7 +2033,9 @@ function DetailPanel({
                     value={expectedVisitTime}
                     disabled={expectedVisitPending}
                     onChange={(e) => setExpectedVisitTime(e.target.value)}
-                    onBlur={saveExpectedVisitTime}
+                    onBlur={() => {
+                      if (!expectedVisitPending) saveExpectedVisitTime();
+                    }}
                   />
                   <label style={{ ...styles.expectedVisitPendingLabel, ...(expectedVisitPending ? styles.expectedVisitPendingLabelOn : {}) }}>
                     <input type="checkbox" checked={expectedVisitPending} onChange={(e) => {
@@ -2052,7 +2052,7 @@ function DetailPanel({
                 {expectedVisitSaveState === "saving" && <div style={styles.saveStateHint}>保存中…</div>}
                 {expectedVisitSaveState === "saved" && <div style={styles.saveStateSuccess}>已保存 ✓</div>}
                 {expectedVisitSaveState === "error" && <div style={styles.saveStateError}>保存失败，请重试</div>}
-                {!order.expectedVisitTime && <div style={styles.warningHint}>⚠ 未填写预计上门时间</div>}
+                {!expectedVisitPending && !expectedVisitTime.trim() && <div style={styles.warningHint}>⚠ 未填写预计上门时间</div>}
               </Field>
             )}
             {order.status === "已完成" && (
@@ -2080,6 +2080,7 @@ function DetailPanel({
                   <VisitForm
                   key="new"
                   initialVisit={null}
+                  expectedVisitTime={order.expectedVisitPending ? null : order.expectedVisitTime}
                   onCancel={onCancelVisitForm}
                   onSubmit={(v) => {
                     onAddVisit(v);
@@ -2706,15 +2707,14 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
   );
 }
 
-function VisitForm({ initialVisit, onCancel, onSubmit, technicians, technicianFeePresets = [], employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
+function VisitForm({ initialVisit, expectedVisitTime = null, onCancel, onSubmit, technicians, technicianFeePresets = [], employees = [], orderId, onAddTechnician, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const initTech = initialVisit ? technicians.find((t) => t.id === initialVisit.technicianId) : null;
   const [technician, setTechnician] = useState(initTech || null);
   const [serviceType, setServiceType] = useState(initialVisit?.serviceType || "");
   const [expenseRecords, setExpenseRecords] = useState(() => (initialVisit?.expenseRecords || []).map((record) => ({ ...record })));
-  const [masterPhone, setMasterPhone] = useState(initialVisit?.masterPhone || "");
   const [freeMasterName, setFreeMasterName] = useState(initialVisit && !initTech ? initialVisit.master : "");
   const [visitTime, setVisitTime] = useState(() => {
-    const base = initialVisit ? new Date(initialVisit.visitTime) : new Date();
+    const base = initialVisit ? new Date(initialVisit.visitTime) : (expectedVisitTime ? new Date(expectedVisitTime) : new Date());
     base.setMinutes(base.getMinutes() - base.getTimezoneOffset());
     return base.toISOString().slice(0, 16);
   });
@@ -2736,7 +2736,6 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, technicianFe
     }
     onSubmit({
       master: masterName,
-      masterPhone: masterPhone.trim(),
       technicianId: technician?.id || null,
       serviceType: serviceType.trim(),
       visitTime: new Date(visitTime).toISOString(),
@@ -2755,14 +2754,10 @@ function VisitForm({ initialVisit, onCancel, onSubmit, technicians, technicianFe
             valueId={technician?.id}
             onSelect={(t) => {
               setTechnician(t);
-              setMasterPhone(t?.phone || "");
               if (!t) setFreeMasterName("");
             }}
             onAddTechnician={onAddTechnician}
           />
-        </Field>
-        <Field label="师傅电话">
-          <input style={styles.input} value={masterPhone} onChange={(e) => setMasterPhone(e.target.value)} placeholder="选填" />
         </Field>
       </div>
       {!technician && (
