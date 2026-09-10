@@ -5,6 +5,12 @@ export const metadata = {
   description: "空调维修维保工单进度追踪",
 };
 
+export const viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+};
+
 export default function RootLayout({ children }) {
   return (
     <html lang="zh-CN">

@@ -120,7 +120,7 @@ function StoresView() {
   }
 
   return (
-    <div style={styles.page}>
+    <div className="stores-page" style={styles.page}>
       <div style={styles.headerRow}>
         <div>
           <div style={styles.title}>门店</div>
@@ -158,7 +158,7 @@ function StoresView() {
                 <MapPin size={13} /> {city}
                 <span style={styles.cityCount}>{rows.length} 家</span>
               </div>
-              <div style={styles.list}>
+              <div className="stores-list" style={styles.list}>
                 {rows.map(({ store, relatedOrders, recentServiceTime }) => (
                   <button key={store.id} type="button" style={styles.card} className="card-hover" onClick={() => openStore(store.id)}>
                     <div style={styles.cardTop}>
@@ -166,6 +166,7 @@ function StoresView() {
                       <Pencil size={14} color="#8FA1A8" />
                     </div>
                     <div style={styles.location}><MapPin size={12} /> {store.brand} · {store.mall}</div>
+                    {store.contact_phone && <div className="store-card-phone"><Phone size={12} /><a className="phone-link" href={`tel:${store.contact_phone}`} onClick={(e) => e.stopPropagation()}>{store.contact_phone}</a></div>}
                     <div style={styles.statsRow}>
                       <span>最近服务：{recentServiceTime ? fmtDate(recentServiceTime) : "暂无"}</span>
                       <span>关联工单：{relatedOrders.length} 单</span>
@@ -218,27 +219,27 @@ function StoresView() {
 
 function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit }) {
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+    <div className="stores-detail-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="stores-detail-panel" style={styles.panel} onClick={(e) => e.stopPropagation()}>
         <div style={styles.panelHeader}>
           <div>
             <div style={styles.panelTitle}>{store.store_name}</div>
           </div>
           <div style={styles.headerButtons}>
             <button type="button" style={styles.secondaryBtn} onClick={onEdit}><Pencil size={13} /> 编辑</button>
-            <button type="button" style={styles.iconBtn} onClick={onClose}><X size={18} /></button>
+            <button type="button" className="mobile-panel-close" style={styles.iconBtn} onClick={onClose}><X size={18} /></button>
           </div>
         </div>
-        <div style={styles.panelBody} className="scrollbar">
+        <div className="stores-detail-body" style={styles.panelBody}>
           <SectionTitle text="基本信息" />
-          <div style={styles.infoGrid}>
+          <div className="stores-info-grid" style={styles.infoGrid}>
             <Info label="城市" value={store.city} />
             <Info label="品牌" value={store.brand} />
             <Info label="商场" value={store.mall} />
             <Info label="门店名称" value={store.store_name} />
-            <Info label="地址" value={store.address} />
+            <Info label="地址" value={store.address ? <a className="address-link-inline" href={`https://uri.amap.com/search?keyword=${encodeURIComponent(store.address)}`} target="_blank" rel="noreferrer">{store.address}</a> : null} />
             <Info label="联系人" value={store.contact_name} />
-            <Info label="联系电话" value={store.contact_phone} />
+            <Info label="联系电话" value={store.contact_phone ? <a className="phone-link-inline" href={`tel:${store.contact_phone}`}>{store.contact_phone}</a> : null} />
             <Info label="施工证" value={store.requires_construction_permit ? "需要" : "不需要"} />
           </div>
 
@@ -278,8 +279,8 @@ function StoreForm({ initial, onClose, onSubmit }) {
   });
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+    <div className="stores-form-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="stores-form-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.panelHeader}>
           <div><div style={styles.panelTitle}>编辑门店信息</div><div style={styles.panelSub}>{initial.store_name}</div></div>
           <button type="button" style={styles.iconBtn} onClick={onClose}><X size={18} /></button>
@@ -315,8 +316,8 @@ function NewStoreForm({ onClose, onSubmit }) {
     }
   }, [form.city, form.brand, form.mall]);
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+    <div className="stores-form-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="stores-form-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.panelHeader}><div style={styles.panelTitle}>新建门店</div><button type="button" style={styles.iconBtn} onClick={onClose}><X size={18} /></button></div>
         <div style={styles.formBody}>
           <Field label="城市 *"><input style={styles.input} value={form.city} onChange={(e) => update("city", e.target.value)} /></Field>

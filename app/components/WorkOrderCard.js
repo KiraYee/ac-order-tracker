@@ -1,6 +1,6 @@
 "use client";
 
-import { Clock, Users } from "lucide-react";
+import { Clock, Phone, Users } from "lucide-react";
 import { STATUS_STYLE, fmtDate, orderChargeTotal, orderStoreDisplay, orderTechnicianFeeBreakdown, expenseSettlementMeta } from "../../lib/dataHelpers";
 import OrderTimeoutNotice from "./OrderTimeoutNotice";
 
@@ -38,6 +38,8 @@ export default function WorkOrderCard({
       : "登记上门时间";
   const technicianFees = orderTechnicianFeeBreakdown(order, technicians);
   const clientAmount = orderChargeTotal(order);
+  const location = [display.city, display.mall, display.storeName].filter(Boolean).join(" · ") || "未填写门店信息";
+  const completionTime = order.completedAt || order.completionTime;
 
   return (
     <article
@@ -52,7 +54,7 @@ export default function WorkOrderCard({
     >
       <div style={styles.markerColumn}><span className={order.status === "维修中" ? "work-order-live-marker" : ""} style={{ ...styles.marker, background: style.dot }} /></div>
       <div style={styles.body}>
-        <div style={styles.topLine}>
+        <div className="work-order-desktop-top" style={styles.topLine}>
           <div style={styles.locationLine}>
             <span style={styles.ticketNo}>{order.ticketNo || "未编号"}</span>
             <span style={styles.title}>
@@ -71,9 +73,34 @@ export default function WorkOrderCard({
             )}
           </div>
         </div>
-        <div style={styles.description}><strong>故障描述</strong>：{order.issueDesc || "未填写"}</div>
-        {order.notes ? <div style={styles.notes}><strong>备注</strong>：{order.notes}</div> : null}
-        <div style={styles.meta}>
+        <div className="work-order-mobile-summary">
+          <div className="work-order-mobile-status" style={{ background: (STATUS_STYLE[order.status] || style).bg, color: (STATUS_STYLE[order.status] || style).fg }}>
+            {order.status || "未设置状态"}
+          </div>
+          <div className="work-order-mobile-location">{location}</div>
+          <div className="work-order-mobile-times">
+            <span>预计上门：{order.expectedVisitTime ? fmtDate(order.expectedVisitTime) : "—"}</span>
+            <span>完工时间：{completionTime ? fmtDate(completionTime) : "—"}</span>
+          </div>
+          <div className="work-order-mobile-technician">
+            <Users size={15} />
+            {technician ? (
+              <span>{technician.name}{technician.phone ? <a href={`tel:${technician.phone}`} onClick={(event) => event.stopPropagation()}><Phone size={13} />{technician.phone}</a> : null}</span>
+            ) : <span>未指派</span>}
+          </div>
+          <div className="work-order-mobile-fees">
+            {clientAmount > 0 && <span className={order.clientSettled ? "settled" : "pending"}>甲方 ¥{clientAmount} {order.clientSettled ? "已结算" : "未结算"}</span>}
+            {technicianFees.map((fee) => {
+              const meta = expenseSettlementMeta(fee);
+              const stateClass = meta.label === "已结清" ? "settled" : meta.label === "已垫付，待报销" ? "reimburse-pending" : "pending";
+              return <span key={fee.name} className={stateClass}>师傅 ¥{fee.amount} {meta.label}</span>;
+            })}
+          </div>
+          <div className="work-order-mobile-alerts"><OrderTimeoutNotice order={order} now={now} /></div>
+        </div>
+        <div className="work-order-desktop-only" style={styles.description}><strong>故障描述</strong>：{order.issueDesc || "未填写"}</div>
+        {order.notes ? <div className="work-order-desktop-only" style={styles.notes}><strong>备注</strong>：{order.notes}</div> : null}
+        <div className="work-order-desktop-meta" style={styles.meta}>
           <span><Clock size={12} />报修 {fmtDate(order.reportTime)}</span>
           {clientAmount > 0 ? (
             <span style={styles.settlementItem}>

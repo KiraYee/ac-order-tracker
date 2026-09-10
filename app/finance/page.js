@@ -280,7 +280,7 @@ function FinanceView({ userEmail }) {
 
   if (loading) {
     return (
-      <div style={styles.page}>
+      <div className="finance-page" style={styles.page}>
         <div style={styles.centerState}>
           <Loader2 size={22} color="#1F7A8C" style={{ animation: "spin 1s linear infinite" }} />
         </div>
@@ -289,7 +289,7 @@ function FinanceView({ userEmail }) {
   }
 
   return (
-    <div style={styles.page}>
+    <div className="finance-page" style={styles.page}>
       <div style={styles.headerRow}>
         <div>
           <div style={styles.title}>财务</div>
@@ -303,7 +303,7 @@ function FinanceView({ userEmail }) {
         </div>
       )}
 
-      <div style={styles.statsGrid}>
+      <div className="finance-stats-grid" style={styles.statsGrid}>
         <div style={{ ...styles.statCard, borderColor: "#E08E3340" }}>
           <div style={styles.statNum}>¥{receivableTotal.toLocaleString()}</div>
           <div style={styles.statLabel}>应收甲方（{receivables.length} 单未结算）</div>
@@ -326,7 +326,7 @@ function FinanceView({ userEmail }) {
         </div>
       </div>
 
-      <div style={styles.tabs}>
+      <div className="finance-tabs" style={styles.tabs}>
         <button style={{ ...styles.tab, ...(tab === "receivable" ? styles.tabActive : {}) }} onClick={() => setTab("receivable")}>
           客户费用结算
         </button>
@@ -347,7 +347,7 @@ function FinanceView({ userEmail }) {
 
       {tab === "advances" && (
         <div>
-          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+          <div className="finance-advance-action" style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
             <button style={styles.primaryBtn} onClick={() => { setEditingAdvance(null); setShowNewAdvance(true); }}>
               <Plus size={15} /> 登记垫付
             </button>
@@ -514,7 +514,7 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
 
   return (
     <div>
-      <div style={styles.filterBar}>
+      <div className="finance-filter-bar" style={styles.filterBar}>
         <select style={styles.filterInput} value={filters.range} onChange={(e) => updateFilter("range", e.target.value)}><option value="all">全部时间</option><option value="month">本月</option><option value="last_month">上月</option><option value="custom">自定义</option></select>
         {filters.range === "custom" && <><input style={styles.filterInput} type="date" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} /><input style={styles.filterInput} type="date" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} /></>}
         <select style={styles.filterInput} value={filters.storeId} onChange={(e) => updateFilter("storeId", e.target.value)}><option value="">全部门店</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.store_name}</option>)}</select>
@@ -550,7 +550,7 @@ function FinanceOrderRow({ order, kind, amount, settled, settledAt, createdAt, s
   const storeDisplay = orderStoreDisplay(order);
   const location = storeDisplay.storeName || `${storeDisplay.city}${storeDisplay.mall}` || order.mall || "未关联门店";
   return (
-    <div id={kind === "technician" ? `expense-${expenseRecordId}` : undefined} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
+    <div id={kind === "technician" ? `expense-${expenseRecordId}` : undefined} className="finance-row finance-client-row" style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
       <Link href={`/orders?open=${order.id}`} style={styles.rowMain}>
         {showTypeTag && <span style={{ ...styles.typeTag, background: `${color}18`, color }}>{label}</span>}
         <span style={styles.ticketNo}>{order.ticketNo}</span>
@@ -572,7 +572,7 @@ function TechnicianPayableRow({ item, highlight = false, showSettlementDate = fa
   const display = orderStoreDisplay(item.order);
   const location = display.storeName || `${display.city || ""}${display.mall || ""}` || item.order.mall || "未关联门店";
   return (
-    <div id={`expense-${item.records[0]?.id}`} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
+    <div id={`expense-${item.records[0]?.id}`} className="finance-row finance-technician-row" style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
       <Link href={`/orders?open=${item.order.id}`} style={styles.rowMain}>
         <span style={styles.ticketNo}>{item.order.ticketNo}</span>
         <span style={styles.rowMall}>{location} · {item.techName} · 完工：{item.order.completedAt ? fmtDateShort(item.order.completedAt) : "未完工"} · 合计¥{item.amount}</span>
@@ -591,7 +591,7 @@ function FinanceAdvanceRow({ advance, orders, highlight = false, showTypeTag = f
   const relatedStore = relatedOrder ? orderStoreDisplay(relatedOrder) : null;
   const location = relatedStore?.storeName || (relatedStore ? `${relatedStore.city}${relatedStore.mall}` : "");
   return (
-    <div id={`advance-${advance.id}`} style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
+    <div id={`advance-${advance.id}`} className="finance-row finance-advance-row" style={{ ...styles.row, ...(highlight ? styles.targetRow : {}) }}>
       <div style={styles.rowMain}>
         {showTypeTag && <span style={{ ...styles.typeTag, background: "#FBEEDD", color: "#A5661A" }}>垫付</span>}
         <span style={{ fontWeight: 700 }}>{advance.employee_name}</span>

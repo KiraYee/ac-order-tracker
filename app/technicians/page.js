@@ -97,13 +97,13 @@ function TechniciansView() {
   const editingTech = stats.find((t) => t.id === editingId) || null;
 
   return (
-    <div style={styles.page}>
+    <div className="technicians-page" style={styles.page}>
       <div style={styles.headerRow}>
         <div>
           <div style={styles.title}>师傅</div>
           <div style={styles.subtitle}>按城市分组，点开查看合作数据</div>
         </div>
-        <div style={styles.headerActions}>
+        <div className="technicians-header-actions" style={styles.headerActions}>
           <button style={styles.exportBtn} onClick={() => exportTechniciansWorkbook(technicians)}>
             导出 Excel
           </button>
@@ -131,7 +131,7 @@ function TechniciansView() {
               <MapPin size={13} color="#1F7A8C" /> {g.city}
               <span style={styles.cityCount}>{g.technicians.length} 位</span>
             </div>
-            <div style={styles.grid}>
+            <div className="technicians-grid" style={styles.grid}>
               {g.technicians.map((t) => (
                 <button key={t.id} style={styles.card} className="card-hover" onClick={() => setSelectedId(t.id)}>
                   <div style={styles.cardTop}>
@@ -148,7 +148,7 @@ function TechniciansView() {
                   </div>
                   {t.phone && (
                     <div style={styles.cardRow}>
-                      <Phone size={11} /> {t.phone}
+                       <Phone size={11} /> <a className="phone-link" href={`tel:${t.phone}`} onClick={(e) => e.stopPropagation()}>{t.phone}</a>
                     </div>
                   )}
                   {t.address && (
@@ -222,8 +222,8 @@ function TechnicianDetail({ technician, orders, onClose }) {
   relatedVisits.sort((a, b) => new Date(b.visitTime) - new Date(a.visitTime));
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
+    <div className="technicians-detail-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="technicians-detail-panel" style={styles.panel} onClick={(e) => e.stopPropagation()}>
         <div style={styles.panelHeader}>
           <div>
             <div style={styles.panelName}>{technician.name}</div>
@@ -233,17 +233,17 @@ function TechnicianDetail({ technician, orders, onClose }) {
               {(technician.skills || []).length ? ` · ${(technician.skills || []).join(" / ")}` : ""}
             </div>
           </div>
-          <button style={styles.iconBtn} onClick={onClose}>
+          <button className="mobile-panel-close" style={styles.iconBtn} onClick={onClose}>
             <X size={18} />
           </button>
         </div>
-        <div style={styles.panelBody} className="scrollbar">
+        <div className="technicians-detail-body" style={styles.panelBody}>
           {technician.address && (
-            <div style={styles.addrBox}>
+              <a className="address-link" href={`https://uri.amap.com/search?keyword=${encodeURIComponent(technician.address)}`} target="_blank" rel="noreferrer" style={styles.addrBox}>
               <MapPin size={12} /> {technician.address}
-            </div>
+              </a>
           )}
-          <div style={styles.summaryGrid}>
+          <div className="technicians-summary-grid" style={styles.summaryGrid}>
             <div style={styles.summaryCard}>
               <div style={styles.summaryNum}>{technician.completedCount}</div>
               <div style={styles.summaryLabel}>已完成工单</div>
@@ -336,8 +336,8 @@ function TechnicianFormModal({ initial, onClose, onSubmit }) {
   }
 
   return (
-    <div style={styles.overlay2} onClick={onClose}>
-      <div style={styles.modal} onClick={(e) => e.stopPropagation()}>
+    <div className="technicians-form-overlay" style={styles.overlay2} onClick={onClose}>
+      <div className="technicians-form-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <span style={styles.modalTitle}>{initial ? "编辑师傅信息" : "添加师傅"}</span>
           <button style={styles.iconBtn} onClick={onClose}>

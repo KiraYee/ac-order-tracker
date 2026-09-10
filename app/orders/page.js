@@ -1252,13 +1252,13 @@ function OrdersView({ userEmail }) {
   }
 
   return (
-    <div style={styles.page}>
+    <div className="orders-page" style={styles.page}>
       <div style={styles.headerRow}>
         <div>
           <div style={styles.title}>工单</div>
           <div style={styles.subtitle}>待上门工单按预计上门时间从近到远排列</div>
         </div>
-        <div style={styles.headerActions}>
+        <div className="orders-header-actions" style={styles.headerActions}>
           <div style={styles.exportWrap}>
             <button style={styles.exportBtn} onClick={() => setShowExportMenu((prev) => !prev)}>
               导出 Excel
@@ -1287,8 +1287,8 @@ function OrdersView({ userEmail }) {
       )}
       {successMsg && <div style={styles.successBar}>{successMsg}</div>}
 
-      <div style={styles.filterBar}>
-        <div style={styles.tabs}>
+      <div className="orders-filter-bar" style={styles.filterBar}>
+        <div className="orders-status-tabs" style={styles.tabs}>
           <button style={{ ...styles.tab, ...(statusFilter === "all" ? styles.tabActive : {}) }} onClick={() => setStatusFilter("all")}>
             全部 <span style={styles.tabCount}>{counts.all}</span>
           </button>
@@ -1299,7 +1299,7 @@ function OrdersView({ userEmail }) {
             </button>
           ))}
         </div>
-        <div style={styles.searchBox}>
+        <div className="orders-search-box" style={styles.searchBox}>
           <Search size={14} color="#8FA1A8" />
           <input
             style={styles.searchInput}
@@ -1308,7 +1308,7 @@ function OrdersView({ userEmail }) {
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
-        <label style={styles.filterSelectLabel}>
+        <label className="orders-follower-filter" style={styles.filterSelectLabel}>
           跟单人
           <select style={styles.filterSelect} value={followerFilter} onChange={(e) => setFollowerFilter(e.target.value)}>
             <option value="all">全部</option>
@@ -1317,7 +1317,7 @@ function OrdersView({ userEmail }) {
             ))}
           </select>
         </label>
-        <div style={styles.timeFilterWrap}>
+        <div className="orders-time-filter" style={styles.timeFilterWrap}>
           <button
             type="button"
             style={styles.timeFilterButton}
@@ -1828,22 +1828,22 @@ function DetailPanel({
   }
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.panel} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.panelHeader}>
+    <div className="orders-detail-overlay" style={styles.overlay} onClick={onClose}>
+      <div className="orders-detail-panel" style={styles.panel} onClick={(e) => e.stopPropagation()}>
+        <div className="orders-detail-header" style={styles.panelHeader}>
           <div>
             <div style={styles.ticketNoLg}>{order.ticketNo}</div>
             <div style={styles.panelMall}>
               {order.city ? `${order.city} · ` : ""}{order.mall}
             </div>
           </div>
-          <button style={styles.iconBtn} onClick={onClose}>
+          <button className="orders-detail-close" style={styles.iconBtn} onClick={onClose}>
             <X size={18} />
           </button>
         </div>
 
-        <div style={styles.panelBody} className="scrollbar">
-          <div style={styles.sectionBlock}>
+        <div className="orders-detail-body" style={styles.panelBody}>
+          <div className="orders-detail-section" style={styles.sectionBlock}>
             <div style={styles.sectionTitle}>工单信息</div>
             {relatedOrder && !editingRelated && (
               <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
@@ -1869,7 +1869,7 @@ function DetailPanel({
               </Field>
             )}
 
-            <div style={styles.formRow3}>
+            <div className="orders-detail-form-grid" style={styles.formRow3}>
               <Field label="城市">
                 <CityInput value={city} cities={cities} onChange={setCity} />
               </Field>
@@ -1890,7 +1890,7 @@ function DetailPanel({
                 {store.notes && <div>备注：{store.notes}</div>}
               </Link>
             )}
-            <div style={styles.formRow2}>
+            <div className="orders-detail-form-grid" style={styles.formRow2}>
               <Field label="报修时间">
                 <input
                   style={styles.input}
@@ -1900,7 +1900,7 @@ function DetailPanel({
                 />
               </Field>
             </div>
-            <div style={styles.formRow2}>
+            <div className="orders-detail-form-grid" style={styles.formRow2}>
               <Field label="甲方公司">
                 <NamePicker
                   items={clients}
@@ -1969,14 +1969,14 @@ function DetailPanel({
             </div>
           </div>
 
-          <div style={styles.sectionBlock}>
+          <div className="orders-detail-section" style={styles.sectionBlock}>
             <div style={styles.sectionTitle}><Wrench size={13} /> 当前负责师傅</div>
             {assignedTech ? (
               <>
                 <div style={styles.assignedTechInfo}>
                   <div style={styles.assignedTechName}>{assignedTech.name}</div>
-                  <div style={styles.assignedTechMeta}>
-                    {assignedTech.phone ? <><Phone size={11} /> {assignedTech.phone}</> : "暂无电话"}
+                <div style={styles.assignedTechMeta}>
+                    {assignedTech.phone ? <a className="orders-phone-link" href={`tel:${assignedTech.phone}`} onClick={(event) => event.stopPropagation()}><Phone size={11} /> {assignedTech.phone}</a> : "暂无电话"}
                   </div>
                 </div>
                 <TechnicianPicker
@@ -2001,7 +2001,7 @@ function DetailPanel({
             )}
           </div>
 
-          <div style={styles.sectionBlock}>
+          <div className="orders-detail-section" style={styles.sectionBlock}>
             <div style={styles.sectionTitle}>当前状态 / 上门记录</div>
               {lockedVisitNotice && <LockedVisitNotice visit={lockedVisitNotice} advances={advances} />}
             <div style={styles.statusRow}>
@@ -2178,7 +2178,7 @@ function DetailPanel({
             </div>
           </div>
 
-          <div style={styles.sectionBlock}>
+          <div className="orders-detail-section" style={styles.sectionBlock}>
             <div style={styles.sectionTitle}>保险费用</div>
             <ExpenseRecordsEditor
               records={insuranceRecords}
@@ -2195,7 +2195,7 @@ function DetailPanel({
             />
           </div>
 
-          <div style={styles.sectionBlock}>
+          <div className="orders-detail-section" style={styles.sectionBlock}>
             <div style={styles.sectionTitle}><DollarSign size={13} /> 向甲方报价管理</div>
             <div style={styles.moneyRow}>
               {totalCharge > 0 && <div style={styles.moneyChip}>向甲方报价 ¥{totalCharge}</div>}
@@ -2235,7 +2235,7 @@ function DetailPanel({
           )}
 
           {order.status === "已完成" && (
-            <div style={styles.sectionBlock}>
+            <div className="orders-detail-section" style={styles.sectionBlock}>
               <div style={styles.sectionTitle}><Camera size={13} /> 验收管理</div>
               <AcceptancePhotoUploader order={order} onPatch={onPatch} />
               {order.acceptanceSignedPdfUrl && (

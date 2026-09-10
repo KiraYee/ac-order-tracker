@@ -290,3 +290,802 @@ textarea {
 .acceptance-records-state { min-height: 220px; max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed #d5e0de; border-radius: 12px; color: #8fa1a8; font-size: 13px; }
 .acceptance-records-state a { color: #1f7a8c; font-weight: 600; text-decoration: none; }
 @media (max-width: 700px) { .acceptance-records-page { padding: 24px 14px 50px; } .acceptance-records-header { align-items: stretch; flex-direction: column; } .acceptance-new-button { align-self: flex-start; } }
+
+/* Staff workspace responsive layout. Desktop layout remains controlled by the existing inline styles. */
+.mobile-header,
+.mobile-nav-backdrop,
+.work-order-mobile-summary {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  html,
+  body {
+    min-width: 0;
+  }
+
+  .app-shell {
+    display: block !important;
+    min-height: 100vh;
+    width: 100%;
+  }
+
+  .app-sidebar {
+    display: none !important;
+  }
+
+  .mobile-header {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 54px;
+    padding: calc(6px + env(safe-area-inset-top)) 14px 6px;
+    border-bottom: 1px solid #dde6e4;
+    background: rgba(255, 255, 255, .96);
+    backdrop-filter: blur(10px);
+  }
+
+  .mobile-menu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 42px;
+    height: 42px;
+    flex: 0 0 42px;
+    border: 1px solid #e2e9e8;
+    border-radius: 9px;
+    background: #f4f7f6;
+    color: #145560;
+  }
+
+  .mobile-header-title {
+    min-width: 0;
+    color: #16262b;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .mobile-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: block;
+    width: 100%;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    background: rgba(18, 32, 36, .38);
+  }
+
+  .app-sidebar.mobile-open {
+    position: fixed !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    z-index: 60;
+    display: flex !important;
+    width: min(82vw, 300px) !important;
+    height: 100dvh !important;
+    padding: calc(14px + env(safe-area-inset-top)) 12px calc(14px + env(safe-area-inset-bottom));
+    border-right: 1px solid #dde6e4;
+    box-shadow: 10px 0 28px rgba(18, 32, 36, .14);
+  }
+
+  .app-sidebar.mobile-open .nav-item,
+  .app-sidebar.mobile-open .sign-out-button {
+    min-height: 44px;
+  }
+
+  .app-sidebar.mobile-open .nav-item {
+    padding: 10px 12px;
+  }
+
+  .app-shell > div:last-child {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .orders-page {
+    width: 100%;
+    max-width: none !important;
+    padding: 18px 14px calc(28px + env(safe-area-inset-bottom)) !important;
+    overflow-x: visible;
+  }
+
+  .orders-header-actions {
+    width: 100%;
+    align-items: stretch !important;
+    flex-wrap: wrap;
+  }
+
+  .orders-header-actions > * {
+    min-width: 0;
+    flex: 1 1 140px;
+  }
+
+  .orders-header-actions .export-wrap {
+    flex: 1 1 140px;
+  }
+
+  .orders-header-actions button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .orders-filter-bar {
+    display: flex !important;
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 10px !important;
+    width: 100%;
+  }
+
+  .orders-status-tabs {
+    display: flex !important;
+    width: calc(100% + 28px);
+    margin-left: -14px;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    padding: 0 14px 3px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+  }
+
+  .orders-status-tabs > button {
+    min-height: 40px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .orders-search-box {
+    width: 100%;
+    min-width: 0 !important;
+    min-height: 44px;
+    padding: 9px 11px !important;
+  }
+
+  .orders-search-box input {
+    min-height: 28px !important;
+  }
+
+  .orders-follower-filter {
+    display: flex !important;
+    width: 100%;
+    min-height: 44px;
+    justify-content: space-between;
+  }
+
+  .orders-follower-filter select {
+    min-width: 0;
+    flex: 1;
+    min-height: 44px;
+  }
+
+  .orders-time-filter {
+    width: 100%;
+  }
+
+  .orders-time-filter > button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .orders-time-filter > div {
+    left: 0 !important;
+    right: 0;
+    width: auto !important;
+    max-width: 100%;
+  }
+
+  .orders-page .statusRows,
+  .orders-page .groupList {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .orders-page .work-order-card {
+    max-width: 100%;
+  }
+
+  .app-shell input,
+  .app-shell select,
+  .app-shell textarea,
+  .app-shell button {
+    max-width: 100%;
+  }
+
+  .app-shell input,
+  .app-shell select {
+    min-height: 44px;
+  }
+
+  .app-shell button {
+    min-height: 44px;
+  }
+
+  .app-shell button svg {
+    flex-shrink: 0;
+  }
+
+  .work-order-card {
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
+    padding: 12px 13px !important;
+  }
+
+  .work-order-card > .work-order-mobile-summary {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .work-order-desktop-top,
+  .work-order-desktop-only,
+  .work-order-desktop-meta {
+    display: none !important;
+  }
+
+  .work-order-mobile-status {
+    align-self: flex-start;
+    max-width: 100%;
+    padding: 5px 9px;
+    border-radius: 14px;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .work-order-mobile-location {
+    min-width: 0;
+    color: #14212b;
+    font-size: 15px;
+    font-weight: 700;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .work-order-mobile-times,
+  .work-order-mobile-technician,
+  .work-order-mobile-fees {
+    display: flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px 10px;
+    color: #5e6c76;
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .work-order-mobile-times span {
+    min-width: 0;
+  }
+
+  .work-order-mobile-technician {
+    color: #4c6169;
+    font-weight: 600;
+  }
+
+  .work-order-mobile-technician > span {
+    display: inline-flex;
+    min-width: 0;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .work-order-mobile-technician a,
+  .orders-phone-link {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    gap: 4px;
+    color: #145560;
+    text-decoration: none;
+  }
+
+  .work-order-mobile-fees span {
+    padding: 4px 7px;
+    border-radius: 8px;
+    font-size: 11.5px;
+    font-weight: 700;
+  }
+
+  .work-order-mobile-fees .pending {
+    color: #a5661a;
+    background: #fbeedd;
+  }
+
+  .work-order-mobile-fees .reimburse-pending {
+    color: #b5450c;
+    background: #fbeded;
+  }
+
+  .work-order-mobile-fees .settled {
+    color: #2f7a4f;
+    background: #e4f3e9;
+  }
+
+  .work-order-mobile-alerts {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .work-order-mobile-alerts > span {
+    display: flex !important;
+    max-width: 100%;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .work-order-mobile-alerts .work-order-reminder {
+    max-width: 100%;
+    white-space: normal !important;
+  }
+
+  .orders-detail-overlay {
+    align-items: stretch !important;
+  }
+
+  .orders-detail-panel {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh !important;
+    max-height: none !important;
+  }
+
+  .orders-detail-header {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 62px;
+    padding: 10px 14px !important;
+    padding-top: calc(10px + env(safe-area-inset-top)) !important;
+  }
+
+  .orders-detail-close {
+    width: 42px !important;
+    height: 42px !important;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+  }
+
+  .orders-detail-body {
+    min-width: 0;
+    padding: 16px 14px calc(28px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .orders-detail-body .formRow2,
+  .orders-detail-body .formRow3,
+  .orders-detail-body .orders-detail-form-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 0 !important;
+  }
+
+  .orders-detail-body .sectionBlock,
+  .orders-detail-body .orders-detail-section {
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .orders-detail-body .sectionTitle,
+  .orders-detail-body .sectionLabel {
+    line-height: 1.45;
+  }
+
+  .orders-detail-body .statusPills {
+    display: flex !important;
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 7px !important;
+  }
+
+  .orders-detail-body .statusPill {
+    min-height: 40px;
+  }
+
+  .orders-detail-body .expectedVisitRow,
+  .orders-detail-body .moneyRow,
+  .orders-detail-body .timelineHeader,
+  .orders-detail-body .formActions {
+    align-items: stretch !important;
+    flex-wrap: wrap;
+  }
+
+  .orders-detail-body .expectedVisitRow > *,
+  .orders-detail-body .moneyRow > * {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .orders-detail-body .timelineHeader > button,
+  .orders-detail-body .formActions > button,
+  .orders-detail-body .smallPrimaryBtn,
+  .orders-detail-body .smallDangerBtn {
+    min-height: 44px;
+  }
+
+  .orders-detail-body .timelineItem,
+  .orders-detail-body .timelineContent,
+  .orders-detail-body .timelineTop,
+  .orders-detail-body .visitExpenseDetailRow,
+  .orders-detail-body .expenseFormGrid,
+  .orders-detail-body .quoteAddGrid {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .orders-detail-body .visitExpenseDetailRow,
+  .orders-detail-body .expenseFormGrid,
+  .orders-detail-body .quoteAddGrid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .orders-detail-body .visitExpenseDetailRow > *,
+  .orders-detail-body .expenseFormGrid > *,
+  .orders-detail-body .quoteAddGrid > * {
+    min-width: 0;
+  }
+
+  .orders-detail-body .storeInfoBox,
+  .orders-detail-body .relatedLinkChip,
+  .orders-detail-body .metaHint,
+  .orders-detail-body .timelineNote,
+  .orders-detail-body .issueText,
+  .orders-detail-body .assignedTechMeta {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Secondary workspace pages: mobile card and full-screen detail adaptations. */
+@media (max-width: 768px) {
+  .technicians-page,
+  .stores-page,
+  .finance-page {
+    width: 100%;
+    max-width: none !important;
+    min-width: 0;
+    padding: 18px 14px calc(28px + env(safe-area-inset-bottom)) !important;
+    overflow-x: visible;
+  }
+
+  .technicians-header-actions {
+    width: 100%;
+    align-items: stretch !important;
+    flex-wrap: wrap;
+  }
+
+  .technicians-header-actions > button {
+    min-width: 0;
+    flex: 1 1 140px;
+    min-height: 44px;
+  }
+
+  .technicians-grid,
+  .stores-list {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 10px !important;
+    width: 100%;
+  }
+
+  .technicians-grid > button,
+  .stores-list > button {
+    width: 100%;
+    min-width: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .technicians-grid .cardRow,
+  .store-card-phone {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .phone-link,
+  .phone-link-inline {
+    display: inline-flex;
+    min-height: 40px;
+    align-items: center;
+    color: #145560;
+    text-decoration: none;
+  }
+
+  .store-card-phone {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 7px;
+    color: #4c6169;
+    font-size: 12px;
+  }
+
+  .technicians-detail-overlay,
+  .stores-detail-overlay,
+  .technicians-form-overlay,
+  .stores-form-overlay {
+    align-items: stretch !important;
+  }
+
+  .technicians-detail-panel,
+  .stores-detail-panel {
+    width: 100% !important;
+    max-width: none !important;
+    height: 100dvh !important;
+    max-height: none !important;
+  }
+
+  .technicians-detail-body,
+  .stores-detail-body {
+    min-width: 0;
+    padding: 16px 14px calc(28px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .technicians-detail-panel .panelHeader,
+  .stores-detail-panel .panelHeader,
+  .technicians-form-modal .modalHeader,
+  .stores-form-modal .panelHeader {
+    min-height: 62px;
+    padding: 10px 14px !important;
+    padding-top: calc(10px + env(safe-area-inset-top)) !important;
+  }
+
+  .mobile-panel-close,
+  .technicians-detail-panel .iconBtn,
+  .stores-detail-panel .iconBtn,
+  .technicians-form-modal .iconBtn,
+  .stores-form-modal .iconBtn {
+    width: 42px !important;
+    height: 42px !important;
+    align-items: center;
+    justify-content: center;
+    padding: 0 !important;
+  }
+
+  .technicians-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+
+  .technicians-summary-grid .summaryCard:last-child {
+    grid-column: 1 / -1;
+  }
+
+  .technicians-detail-body .presetRow {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) 90px auto auto;
+    align-items: center;
+  }
+
+  .technicians-detail-body .visitRow,
+  .technicians-detail-body .addrBox,
+  .stores-detail-body .infoItem,
+  .stores-detail-body .orderRow {
+    overflow-wrap: anywhere;
+  }
+
+  .address-link,
+  .address-link-inline {
+    color: #145560;
+    text-decoration: none;
+  }
+
+  .address-link {
+    min-height: 44px;
+  }
+
+  .stores-info-grid {
+    grid-template-columns: minmax(0, 1fr) !important;
+  }
+
+  .stores-detail-body .orderRow {
+    display: flex !important;
+    flex-wrap: wrap;
+    align-items: center;
+    min-height: 44px;
+  }
+
+  .technicians-form-modal,
+  .stores-form-modal,
+  .finance-page + .modal {
+    width: 100% !important;
+    max-width: none !important;
+    max-height: 100dvh !important;
+    height: 100dvh;
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  .technicians-form-modal .modalBody,
+  .stores-form-modal .formBody {
+    padding: 16px 14px calc(28px + env(safe-area-inset-bottom)) !important;
+  }
+
+  .technicians-form-modal .formActions,
+  .stores-form-modal .formActions {
+    flex-wrap: wrap;
+  }
+
+  .technicians-form-modal .formActions > button,
+  .stores-form-modal .formActions > button {
+    flex: 1 1 140px;
+    min-height: 44px;
+  }
+
+  .finance-stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 8px !important;
+  }
+
+  .finance-tabs {
+    display: flex !important;
+    width: calc(100% + 28px);
+    margin-left: -14px;
+    flex-wrap: nowrap !important;
+    gap: 6px !important;
+    padding: 0 14px 4px;
+    overflow-x: auto;
+  }
+
+  .finance-tabs > button {
+    flex: 0 0 auto;
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  .finance-filter-bar {
+    display: flex !important;
+    flex-direction: column;
+    align-items: stretch !important;
+    gap: 8px !important;
+    width: 100%;
+  }
+
+  .finance-filter-bar > * {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px;
+  }
+
+  .finance-advance-action {
+    justify-content: stretch !important;
+  }
+
+  .finance-advance-action > button {
+    width: 100%;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  .finance-row {
+    display: flex !important;
+    align-items: stretch !important;
+    flex-direction: column;
+    gap: 10px !important;
+    min-width: 0;
+    overflow: hidden;
+  }
+
+  .finance-row .rowMain,
+  .finance-row .rowRight {
+    width: 100%;
+    min-width: 0;
+    align-items: flex-start !important;
+  }
+
+  .finance-row .rowMain {
+    display: flex !important;
+    flex-direction: column;
+    gap: 5px !important;
+    overflow-wrap: anywhere;
+  }
+
+  .finance-row .rowRight {
+    justify-content: space-between !important;
+    flex-wrap: wrap;
+  }
+
+  .finance-row .rowMall,
+  .finance-row .rowDate {
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+  }
+
+  .finance-row .amount {
+    font-size: 16px !important;
+  }
+
+  .finance-row .settleBtn {
+    min-height: 44px;
+    padding: 8px 12px !important;
+  }
+
+  .finance-row .payableDetails,
+  .finance-row .payableDetailRow {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .finance-row .payableDetailRow {
+    display: flex !important;
+    flex-wrap: wrap;
+    gap: 5px 10px !important;
+  }
+
+  .acceptance-records-page {
+    width: 100%;
+    min-width: 0;
+    overflow-x: hidden;
+    padding: 24px 14px calc(50px + env(safe-area-inset-bottom));
+  }
+
+  .acceptance-records-table-wrap {
+    overflow: visible;
+    border: 0;
+    background: transparent;
+  }
+
+  .acceptance-records-table {
+    display: block;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .acceptance-records-table thead {
+    display: none;
+  }
+
+  .acceptance-records-table tbody,
+  .acceptance-records-table tr,
+  .acceptance-records-table td {
+    display: block;
+    width: 100%;
+  }
+
+  .acceptance-records-table tr {
+    margin-bottom: 10px;
+    padding: 12px;
+    border: 1px solid #e2e9e8;
+    border-radius: 12px;
+    background: #fff;
+  }
+
+  .acceptance-records-table td {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 5px 0;
+    border: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .acceptance-records-table td:nth-child(1)::before { content: "门店"; }
+  .acceptance-records-table td:nth-child(2)::before { content: "完工时间"; }
+  .acceptance-records-table td:nth-child(3)::before { content: "状态"; }
+  .acceptance-records-table td:nth-child(4)::before { content: "签署时间"; }
+  .acceptance-records-table td:nth-child(5) { display: block; padding-top: 10px; }
+  .acceptance-records-table td::before { flex: 0 0 auto; color: #8fa1a8; font-size: 11px; }
+
+  .acceptance-record-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    gap: 7px;
+  }
+
+  .acceptance-record-actions button {
+    min-height: 44px;
+    justify-content: center;
+    white-space: normal;
+  }
+}

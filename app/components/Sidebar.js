@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { LayoutDashboard, ClipboardList, Users, Wallet, Store, FileSignature, Snowflake, LogOut, User } from "lucide-react";
 
-const NAV_ITEMS = [
+export const NAV_ITEMS = [
   { key: "dashboard", href: "/", label: "总览", icon: LayoutDashboard },
   { key: "orders", href: "/orders", label: "工单", icon: ClipboardList },
   { key: "technicians", href: "/technicians", label: "师傅", icon: Users },
@@ -11,9 +11,11 @@ const NAV_ITEMS = [
   { key: "acceptance", href: "/sign/records", label: "电子验收单", icon: FileSignature },
 ];
 
-export default function Sidebar({ active, userEmail, onSignOut }) {
+export default function Sidebar({ active, userEmail, onSignOut, mobileOpen = false, onMobileClose }) {
   return (
-    <aside style={styles.wrap}>
+    <>
+    {mobileOpen && <button type="button" className="mobile-nav-backdrop" aria-label="关闭导航菜单" onClick={onMobileClose} />}
+    <aside className={`app-sidebar${mobileOpen ? " mobile-open" : ""}`} style={styles.wrap}>
       <div style={styles.logoRow}>
         <div style={styles.logoMark}>
           <Snowflake size={16} color="#F5F9F8" strokeWidth={2.2} />
@@ -29,6 +31,8 @@ export default function Sidebar({ active, userEmail, onSignOut }) {
             <Link
               key={item.key}
               href={item.href}
+              onClick={onMobileClose}
+              className="nav-item"
               style={{ ...styles.navItem, ...(isActive ? styles.navItemActive : {}) }}
             >
               <Icon size={16} />
@@ -43,11 +47,12 @@ export default function Sidebar({ active, userEmail, onSignOut }) {
           <User size={13} color="#4C6169" />
           <span style={styles.userEmail}>{userEmail}</span>
         </div>
-        <button style={styles.signOutBtn} onClick={onSignOut}>
+        <button className="sign-out-button" style={styles.signOutBtn} onClick={() => { onMobileClose?.(); onSignOut(); }}>
           <LogOut size={13} /> 退出登录
         </button>
       </div>
     </aside>
+    </>
   );
 }
 
