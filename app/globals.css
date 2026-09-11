@@ -518,7 +518,7 @@ textarea {
     padding: 12px 13px !important;
   }
 
-  .work-order-card > .work-order-mobile-summary {
+  .work-order-card .work-order-mobile-summary {
     display: flex;
     min-width: 0;
     flex-direction: column;
