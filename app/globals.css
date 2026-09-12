@@ -913,6 +913,7 @@ textarea {
   .technicians-form-modal .formActions,
   .stores-form-modal .formActions {
     flex-wrap: wrap;
+    padding-bottom: calc(14px + env(safe-area-inset-bottom)) !important;
   }
 
   .technicians-form-modal .formActions > button,

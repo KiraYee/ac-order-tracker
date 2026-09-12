@@ -297,10 +297,10 @@ function StoreForm({ initial, onClose, onSubmit }) {
               {[false, true].map((value) => <button key={String(value)} type="button" style={{ ...styles.toggleBtn, ...(form.requires_construction_permit === value ? styles.toggleBtnActive : {}) }} onClick={() => update("requires_construction_permit", value)}>{value ? "需要" : "不需要"}</button>)}
             </div>
           </Field>
-          <div style={styles.formActions}>
-            <button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button>
-            <button type="button" style={styles.primaryBtn} onClick={() => onSubmit({ ...form, store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button>
-          </div>
+        </div>
+        <div style={styles.formActions}>
+          <button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button>
+          <button type="button" style={styles.primaryBtn} onClick={() => onSubmit({ ...form, store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button>
         </div>
       </div>
     </div>
@@ -334,8 +334,8 @@ function NewStoreForm({ onClose, onSubmit }) {
               {[false, true].map((value) => <button key={String(value)} type="button" style={{ ...styles.toggleBtn, ...(form.requires_construction_permit === value ? styles.toggleBtnActive : {}) }} onClick={() => update("requires_construction_permit", value)}>{value ? "需要" : "不需要"}</button>)}
             </div>
           </Field>
-          <div style={styles.formActions}><button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!form.city.trim() || !form.brand.trim() || !form.mall.trim() || !form.store_name.trim()} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button></div>
         </div>
+        <div style={styles.formActions}><button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!form.city.trim() || !form.brand.trim() || !form.mall.trim() || !form.store_name.trim()} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button></div>
       </div>
     </div>
   );
@@ -375,13 +375,13 @@ const styles = {
   cityCount: { color: "#8FA1A8", fontSize: 11.5, fontWeight: 500 },
   overlay: { position: "fixed", inset: 0, background: "rgba(18,32,36,0.35)", display: "flex", justifyContent: "flex-end", zIndex: 60 },
   panel: { width: 540, maxWidth: "100%", height: "100%", background: "#F9FAFA", display: "flex", flexDirection: "column", boxShadow: "-8px 0 24px rgba(0,0,0,0.08)" },
-  modal: { width: 500, maxWidth: "92vw", maxHeight: "88vh", margin: "auto", background: "#fff", borderRadius: 14, overflow: "hidden" },
+  modal: { width: 500, maxWidth: "92vw", height: "min(88vh, 760px)", maxHeight: "88vh", margin: "auto", background: "#fff", borderRadius: 14, overflow: "hidden", display: "flex", flexDirection: "column" },
   panelHeader: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "18px 20px", background: "#fff", borderBottom: "1px solid #E2E9E8" },
   panelTitle: { fontWeight: 700, fontSize: 18 },
   panelSub: { color: "#8FA1A8", fontSize: 12, marginTop: 4 },
   headerButtons: { display: "flex", gap: 8, alignItems: "center" },
   panelBody: { padding: 20, overflowY: "auto" },
-  formBody: { padding: 20, overflowY: "auto" },
+  formBody: { flex: 1, minHeight: 0, padding: 20, overflowY: "auto" },
   iconBtn: { background: "#F4F7F6", border: "none", borderRadius: 8, padding: 6, display: "flex", color: "#4C6169" },
   secondaryBtn: { display: "flex", alignItems: "center", gap: 5, background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 7, padding: "6px 10px", fontSize: 12, color: "#4C6169" },
   sectionTitle: { fontWeight: 700, color: "#145560", fontSize: 13, margin: "6px 0 10px" },
@@ -396,7 +396,7 @@ const styles = {
   field: { display: "block", marginBottom: 12 },
   input: { width: "100%", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: "#16262B", background: "#fff", boxSizing: "border-box" },
   textarea: { width: "100%", minHeight: 76, resize: "vertical", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: "#16262B", background: "#fff", boxSizing: "border-box" },
-  formActions: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 18 },
+  formActions: { flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 20px", borderTop: "1px solid #E2E9E8", background: "#fff" },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
   toggleRow: { display: "flex", gap: 6 },

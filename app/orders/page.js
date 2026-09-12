@@ -739,19 +739,27 @@ function OrdersView({ userEmail }) {
   }
 
   async function findStore(city, brand, mall) {
-    if ([city, brand, mall].some((value) => !value.trim())) return null;
-    const cached = stores.find((store) => store.city === city.trim() && store.brand === brand.trim() && store.mall === mall.trim());
+    const cityValue = city.trim();
+    const brandValue = brand.trim();
+    const mallValue = mall.trim();
+    if ([cityValue, brandValue, mallValue].some((value) => !value)) return null;
+    const matchesStore = (store) => (
+      store?.city?.trim() === cityValue &&
+      store?.brand?.trim() === brandValue &&
+      store?.mall?.trim() === mallValue
+    );
+    const cached = stores.find(matchesStore);
     if (cached) return cached;
     const { data, error } = await supabase
       .from("stores")
       .select("*")
-      .eq("city", city.trim())
-      .eq("brand", brand.trim())
-      .eq("mall", mall.trim())
+      .eq("city", cityValue)
+      .eq("brand", brandValue)
+      .eq("mall", mallValue)
       .limit(1)
       .maybeSingle();
     if (error) throw error;
-    return data || null;
+    return matchesStore(data) ? data : null;
   }
 
   async function createStore(data) {
@@ -2866,7 +2874,10 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
 
   useEffect(() => {
     let cancelled = false;
-    if (!city.trim() || !brand.trim() || !mall.trim()) {
+    const cityValue = city.trim();
+    const brandValue = brand.trim();
+    const mallValue = mall.trim();
+    if (!cityValue || !brandValue || !mallValue) {
       setSelectedStore(null);
       setStoreMessage("");
       setStoreName("");
@@ -2874,11 +2885,20 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
     }
     const timer = setTimeout(async () => {
       try {
-        const store = await onFindStore(city, brand, mall);
+        const store = await onFindStore(cityValue, brandValue, mallValue);
         if (cancelled) return;
-        setSelectedStore(store);
-        setStoreName(store?.store_name || generateStoreName(city.trim(), brand.trim(), mall.trim()));
-        setStoreMessage(store ? "已找到历史门店" : "未找到对应门店");
+        const matchedStore = store && store.city?.trim() === cityValue && store.brand?.trim() === brandValue && store.mall?.trim() === mallValue
+          ? store
+          : null;
+        setSelectedStore(matchedStore);
+        if (matchedStore) {
+          setStoreName(matchedStore.store_name || generateStoreName(cityValue, brandValue, mallValue));
+          setStoreMessage("已找到历史门店");
+          return;
+        }
+        setSelectedStore(null);
+        setStoreName(generateStoreName(cityValue, brandValue, mallValue));
+        setStoreMessage("未找到历史门店");
       } catch (e) {
         if (!cancelled) setStoreMessage("门店查询失败，请稍后重试");
       }

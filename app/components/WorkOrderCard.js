@@ -99,7 +99,6 @@ export default function WorkOrderCard({
           <div className="work-order-mobile-alerts"><OrderTimeoutNotice order={order} now={now} /></div>
         </div>
         <div className="work-order-desktop-only" style={styles.description}><strong>故障描述</strong>：{order.issueDesc || "未填写"}</div>
-        {order.notes ? <div className="work-order-desktop-only" style={styles.notes}><strong>备注</strong>：{order.notes}</div> : null}
         <div className="work-order-desktop-meta" style={styles.meta}>
           <span><Clock size={12} />报修 {fmtDate(order.reportTime)}</span>
           {clientAmount > 0 ? (
@@ -139,7 +138,6 @@ const styles = {
   cancelledLabel: { background: "#F3EAEA", color: "#8A5252" },
   title: { fontSize: 14.5, fontWeight: 600, lineHeight: 1.4, color: "#14212B", minWidth: 0 },
   description: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
-  notes: { color: "#5E6C76", fontSize: 13, lineHeight: 1.5, marginTop: 4, whiteSpace: "pre-wrap" },
   meta: { display: "flex", flexWrap: "wrap", alignItems: "center", gap: "6px 12px", color: "#9AA6AD", fontSize: 11.5, marginTop: 9 },
   settlementItem: { display: "inline-flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" },
   settlementPill: { display: "inline-flex", alignItems: "center", borderRadius: 10, padding: "2px 6px", fontSize: 10.5, fontWeight: 700, lineHeight: 1.2 },
