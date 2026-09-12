@@ -665,6 +665,26 @@ function OrdersView({ userEmail }) {
     }
   }
 
+  async function refreshOrder(orderId) {
+    const { data, error } = await supabase
+      .from("orders")
+      .select("*, expense_records(*), visits(*, expense_records(*))")
+      .eq("id", orderId)
+      .single();
+    if (error) throw error;
+    const advanceByExpenseId = new Map(advances.map((item) => [item.expense_record_id, item.reimbursed === true]));
+    const [order] = [orderFromDb(data)].map((item) => ({
+      ...item,
+      expenseRecords: (item.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+      visits: (item.visits || []).map((visit) => ({
+        ...visit,
+        expenseRecords: (visit.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
+      })),
+    }));
+    setOrders((prev) => prev.map((current) => (current.id === orderId ? order : current)));
+    return order;
+  }
+
   async function fetchTechnicians() {
     try {
       const { data, error } = await supabase.from("technicians").select("*").order("name");
@@ -1093,17 +1113,10 @@ function OrdersView({ userEmail }) {
       await Promise.all(removedIds.map((id) => deleteExpenseRecord(id)));
       const changedRecords = nextRecords.filter((record) => existingIds.has(record.id));
       const newRecords = nextRecords.filter((record) => !existingIds.has(record.id));
-      const updatedRecords = await Promise.all(changedRecords.map((record) => updateExpenseRecord(record.id, record)));
-      const insertedRecords = await saveExpenseRecords(visitId, newRecords, orderId);
-      const expenseRecords = [...updatedRecords, ...insertedRecords];
+      await Promise.all(changedRecords.map((record) => updateExpenseRecord(record.id, record)));
+      await saveExpenseRecords(visitId, newRecords, orderId);
       await fetchTechnicianFeePresets();
-      setOrders((prev) =>
-        prev.map((o) =>
-          o.id === orderId
-            ? { ...o, visits: o.visits.map((v) => (v.id === visitId ? { ...v, ...visit, expenseRecords } : v)) }
-            : o
-        )
-      );
+      await refreshOrder(orderId);
       setVisitFormMode(null);
       setErrorMsg("");
     } catch (e) {
