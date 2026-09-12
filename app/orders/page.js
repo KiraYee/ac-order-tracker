@@ -252,14 +252,14 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   const storeById = new Map(stores.map((store) => [store.id, store]));
   const exportOrders = orders;
   const summaryOrders = [...exportOrders].sort((a, b) => {
-    if (!a.reportTime && !b.reportTime) return 0;
     if (!a.reportTime) return 1;
     if (!b.reportTime) return -1;
-    return new Date(b.reportTime).getTime() - new Date(a.reportTime).getTime();
+    return new Date(a.reportTime).getTime() - new Date(b.reportTime).getTime();
   });
   const summary = summaryOrders.map((order) => {
     const store = order.store || storeById.get(order.storeId);
-    const storeName = store?.store_name || [order.city, order.mall].filter(Boolean).join("") || "";
+    const storeDisplay = orderStoreDisplay({ ...order, store });
+    const storeName = storeDisplay.storeName;
     const quoteItems = orderQuoteItems(order);
     const quoteDetails = quoteItems
       .map((item) => `${item.label || ""} ${item.chargeUnit ?? ""}*${item.qty ?? ""}`)
@@ -285,9 +285,10 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
       : technicianFeeRecords.every((record) => record.isSettled === true) ? "是" : "否";
     return {
       "工单编号": order.ticketNo || "",
-      "城市": order.city || "",
-      "品牌": order.brand || "",
-      "商场": order.mall || storeName || "",
+      "城市": storeDisplay.city,
+      "品牌": storeDisplay.brand,
+      "门店": storeName,
+      "商场": storeDisplay.mall,
       "报修时间": excelDate(order.reportTime),
       "完工时间": excelDate(order.completedAt),
       "当前状态": order.status || "",
