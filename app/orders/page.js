@@ -280,9 +280,14 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
     const insuranceFeeTotal = Array.from(expenseRecords.values())
       .filter((record) => record.type === "insurance")
       .reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
+    const settledCount = technicianFeeRecords.filter((record) => record.isSettled === true).length;
     const technicianSettlement = technicianFeeRecords.length === 0
       ? "—"
-      : technicianFeeRecords.every((record) => record.isSettled === true) ? "是" : "否";
+      : settledCount === technicianFeeRecords.length
+        ? "已结算"
+        : settledCount === 0
+          ? "未结算"
+          : "部分结算";
     return {
       "工单编号": order.ticketNo || "",
       "城市": storeDisplay.city,
@@ -308,24 +313,52 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   });
   const technicianDetails = [];
   exportOrders.forEach((order) => {
-    const visitById = new Map((order.visits || []).map((visit, index) => [visit.id, { visit, number: index + 1 }]));
+    const store = order.store || storeById.get(order.storeId);
+    const storeDisplay = orderStoreDisplay({ ...order, store });
+    const visitById = new Map((order.visits || []).map((visit) => [visit.id, visit]));
     const records = new Map();
     for (const record of order.expenseRecords || []) records.set(record.id, record);
     for (const visit of order.visits || []) {
       for (const record of visit.expenseRecords || []) records.set(record.id, record);
     }
+    const groupedDetails = new Map();
     for (const record of records.values()) {
       if (record.type !== "technician_fee") continue;
-      const visitInfo = visitById.get(record.visitId);
-      const visit = visitInfo?.visit;
+      const visit = visitById.get(record.visitId);
       const technicianName = techById.get(record.technicianId)?.name || (visit?.master || "").trim();
+      const groupKey = `${order.ticketNo || order.id}|${technicianName}|${record.visitId || "order"}`;
+      const group = groupedDetails.get(groupKey) || {
+        visit,
+        technicianName,
+        records: [],
+      };
+      group.records.push(record);
+      groupedDetails.set(groupKey, group);
+    }
+    for (const group of groupedDetails.values()) {
+      const settledCount = group.records.filter((record) => record.isSettled === true).length;
+      const settlement = settledCount === group.records.length
+        ? "已结算"
+        : settledCount === 0
+          ? "未结算"
+          : "部分结算";
+      const detail = group.records
+        .map((record) => {
+          const quantity = costItemQty(record);
+          const unitPrice = costItemUnitPrice(record);
+          const amount = Number(record.amount) || costItemAmount(record);
+          return `${record.label || "未命名"} ${quantity}×¥${unitPrice}=¥${amount}`;
+        })
+        .join("；");
+      const totalAmount = group.records.reduce((sum, record) => sum + (Number(record.amount) || costItemAmount(record)), 0);
       technicianDetails.push({
         "工单号": order.ticketNo || "",
-        "第几次上门": visitInfo ? `第${visitInfo.number}次` : "订单级",
-        "上门师傅": technicianName,
-        "上门日期": excelDate(visit?.visitTime),
-        "本次支出金额": Number(record.amount) || 0,
-        "是否结算": record.isSettled === true ? "是" : "否",
+        "门店": storeDisplay.storeName || "",
+        "上门师傅": group.technicianName,
+        "完工时间": excelDate(group.visit?.visitTime),
+        "明细": detail,
+        "本次支出": totalAmount,
+        "是否结算": settlement,
       });
     }
   });
@@ -333,7 +366,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
   const summarySheet = XLSX.utils.json_to_sheet(summary);
   const technicianDetailSheet = XLSX.utils.json_to_sheet(technicianDetails);
   formatExcelDates(summarySheet, ["报修时间", "完成时间", "创建时间"]);
-  formatExcelDates(technicianDetailSheet, ["上门日期"]);
+  formatExcelDates(technicianDetailSheet, ["完工时间"]);
   XLSX.utils.book_append_sheet(workbook, summarySheet, "工单总表");
   XLSX.utils.book_append_sheet(workbook, technicianDetailSheet, "师傅费用明细");
   const date = new Date().toISOString().slice(0, 10);
@@ -643,12 +676,16 @@ function OrdersView({ userEmail }) {
   async function fetchOrders() {
     setLoading(true);
     try {
-      const { data, error } = await supabase
-        .from("orders")
-        .select("*, expense_records(*), visits(*, expense_records(*))")
-        .order("report_time", { ascending: false });
+      const [{ data, error }, { data: advanceRows, error: advanceError }] = await Promise.all([
+        supabase
+          .from("orders")
+          .select("*, expense_records(*), visits(*, expense_records(*))")
+          .order("report_time", { ascending: false }),
+        supabase.from("advances").select("expense_record_id, reimbursed"),
+      ]);
       if (error) throw error;
-      const advanceByExpenseId = new Map(advances.map((item) => [item.expense_record_id, item.reimbursed === true]));
+      if (advanceError) throw advanceError;
+      const advanceByExpenseId = new Map((advanceRows || []).map((item) => [item.expense_record_id, item.reimbursed === true]));
       setOrders((data || []).map(orderFromDb).map((order) => ({
         ...order,
         expenseRecords: (order.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
@@ -666,13 +703,17 @@ function OrdersView({ userEmail }) {
   }
 
   async function refreshOrder(orderId) {
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*, expense_records(*), visits(*, expense_records(*))")
-      .eq("id", orderId)
-      .single();
+    const [{ data, error }, { data: advanceRows, error: advanceError }] = await Promise.all([
+      supabase
+        .from("orders")
+        .select("*, expense_records(*), visits(*, expense_records(*))")
+        .eq("id", orderId)
+        .single(),
+      supabase.from("advances").select("expense_record_id, reimbursed"),
+    ]);
     if (error) throw error;
-    const advanceByExpenseId = new Map(advances.map((item) => [item.expense_record_id, item.reimbursed === true]));
+    if (advanceError) throw advanceError;
+    const advanceByExpenseId = new Map((advanceRows || []).map((item) => [item.expense_record_id, item.reimbursed === true]));
     const [order] = [orderFromDb(data)].map((item) => ({
       ...item,
       expenseRecords: (item.expenseRecords || []).map((record) => ({ ...record, advanceReimbursed: advanceByExpenseId.get(record.id) })),
@@ -756,7 +797,7 @@ function OrdersView({ userEmail }) {
       const { data, error } = await supabase.from("advances").select("expense_record_id, reimbursed");
       if (error) throw error;
       setAdvances(data || []);
-    } catch (e) { /* 垫付表可能尚未迁移 */ }
+    } catch (e) { console.error("fetchAdvances failed:", e); }
   }
 
   async function findStore(city, brand, mall) {
