@@ -2586,6 +2586,15 @@ const EXPENSE_TYPE_STYLES = {
   other: { background: "#EDEFEE", color: "#4C6169" },
 };
 
+function createExpenseTempId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return `expense-temp-${crypto.randomUUID()}`;
+  return `expense-temp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function getExpenseRecordKey(record) {
+  return record?.id || record?.tempId || null;
+}
+
 function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees = [], technicians = [], technicianId = null, technicianFeePresets = [], fixedType, hideMonthly = false, onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense, deferSave = false }) {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState(() => emptyExpenseRecord());
@@ -2604,6 +2613,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       isSettled: false,
       settledAt: null,
       notes: "",
+      tempId: createExpenseTempId(),
     };
   }
 
@@ -2618,9 +2628,14 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       setSettledNotice(record);
       return;
     }
+    const recordKey = getExpenseRecordKey(record);
+    if (!recordKey) {
+      setSaveError("该记录暂无法编辑，请刷新后重试");
+      return;
+    }
     setSaveError("");
     setSettledNotice(null);
-    setEditingId(record.id);
+    setEditingId(recordKey);
     setDraft({ ...record, qty: record.qty ?? 1, unitPrice: record.unitPrice ?? "", payerName: record.payerName || "", notes: record.notes || "" });
   }
 
@@ -2643,40 +2658,41 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       payerName: draft.paymentMethod === "advance" ? draft.payerName.trim() : "",
       settledAt: draft.isSettled ? (draft.settledAt || new Date().toISOString()) : null,
       notes: draft.notes.trim(),
+      tempId: draft.tempId || createExpenseTempId(),
     };
     if (deferSave) {
-      onChange(editingId === "new" ? [...records, next] : records.map((record) => (record.id === editingId ? { ...record, ...next } : record)));
+      onChange(editingId === "new" ? [...records, next] : records.map((record) => (getExpenseRecordKey(record) === editingId ? { ...record, ...next } : record)));
       setEditingId(null);
       return;
     }
     const save = editingId === "new"
       ? ((visitId || orderId) ? onCreateExpense(visitId || null, next, orderId || null) : Promise.resolve(next))
-      : ((visitId || orderId) ? onUpdateExpense(editingId, next) : Promise.resolve({ ...records.find((record) => record.id === editingId), ...next }));
+      : ((visitId || orderId) ? onUpdateExpense(editingId, next) : Promise.resolve({ ...records.find((record) => getExpenseRecordKey(record) === editingId), ...next }));
     save.then((saved) => {
-      onChange(editingId === "new" ? [...records, saved] : records.map((record) => (record.id === editingId ? saved : record)));
+      onChange(editingId === "new" ? [...records, saved] : records.map((record) => (getExpenseRecordKey(record) === editingId ? { ...record, ...saved } : record)));
       setEditingId(null);
     }).catch((error) => {
       setSaveError(`保存费用失败：${error.message || "无法保存费用或同步垫付记录"}`);
     });
   }
 
-  function removeRecord(id) {
+  function removeRecord(recordKey) {
     if (deferSave) {
-      onChange(records.filter((record) => record.id !== id));
+      onChange(records.filter((record) => getExpenseRecordKey(record) !== recordKey));
       return;
     }
     if (visitId || orderId) {
-      onDeleteExpense(id).then(() => onChange(records.filter((record) => record.id !== id))).catch((error) => {
+      onDeleteExpense(recordKey).then(() => onChange(records.filter((record) => getExpenseRecordKey(record) !== recordKey))).catch((error) => {
         setSaveError(`删除费用失败：${error.message || "未知错误"}`);
       });
     } else {
-      onChange(records.filter((record) => record.id !== id));
+      onChange(records.filter((record) => getExpenseRecordKey(record) !== recordKey));
     }
   }
 
   const draftAmount = (Number(draft.qty) || 0) * (Number(draft.unitPrice) || 0);
   const total = records.reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
-  const editingRecord = records.find((record) => record.id === editingId);
+  const editingRecord = records.find((record) => getExpenseRecordKey(record) === editingId);
   const amountLocked = !!editingRecord?.isSettled;
 
   return (
@@ -2689,14 +2705,15 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
       )}
       {settledNotice && (
         <div style={styles.expenseSettledNotice}>
-          该笔支出已结清，不支持修改。如需修改，请先
-          <Link href={`/finance?open_expense=${encodeURIComponent(settledNotice.id)}`} style={styles.expenseFinanceLink}>前往财务页撤销结清</Link>
+          {settledNotice.paymentMethod === "advance" ? "该笔支出为员工垫付，不支持修改。" : <>该笔支出已结清，不支持修改。如需修改，请先
+            <Link href={`/finance?open_expense=${encodeURIComponent(settledNotice.id)}`} style={styles.expenseFinanceLink}>前往财务页撤销结清</Link>
+          </>}
         </div>
       )}
       {records.length > 0 && (
         <div style={styles.expenseList}>
           {records.map((record) => (
-            <div key={record.id || `${record.label}-${record.amount}`} style={styles.expenseRow}>
+            <div key={getExpenseRecordKey(record)} style={styles.expenseRow}>
               <div style={styles.expenseMain}>
                 {fixedType === "insurance" && (
                   <span style={{ ...styles.expenseType, ...EXPENSE_TYPE_STYLES[record.type] }}>{EXPENSE_TYPE_LABELS[record.type] || "其他"}</span>
@@ -2709,7 +2726,7 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
               </div>
               <div style={styles.expenseActions}>
                 <button type="button" style={styles.tinyIconBtn} onClick={() => beginEdit(record)} title="编辑"><Pencil size={12} /></button>
-                <button type="button" style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={() => removeRecord(record.id)} title="删除"><Trash2 size={12} /></button>
+                <button type="button" style={{ ...styles.tinyIconBtn, color: "#C1443D" }} onClick={() => removeRecord(getExpenseRecordKey(record))} title="删除"><Trash2 size={12} /></button>
               </div>
             </div>
           ))}
@@ -2754,10 +2771,10 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
           <div style={styles.expenseEditorActions}>
             {amountLocked && <button type="button" style={styles.ghostBtn} onClick={() => {
               if (deferSave) {
-                onChange(records.map((record) => record.id === editingId ? { ...record, isSettled: false, settledAt: null } : record));
+                onChange(records.map((record) => getExpenseRecordKey(record) === editingId ? { ...record, isSettled: false, settledAt: null } : record));
                 setEditingId(null);
               } else if (window.confirm("该费用已结清，确认撤销结清并允许修改金额吗？")) {
-                onUnsettleExpense(editingId).then((saved) => onChange(records.map((record) => record.id === editingId ? saved : record))).catch(() => {});
+                onUnsettleExpense(editingId).then((saved) => onChange(records.map((record) => getExpenseRecordKey(record) === editingId ? { ...record, ...saved } : record))).catch(() => {});
               }
             }}>{deferSave ? "暂存撤销结清" : "撤销结清"}</button>}
             <button type="button" style={styles.ghostBtn} onClick={() => setEditingId(null)}>取消</button>
