@@ -125,7 +125,8 @@ function CreateAcceptanceView() {
       const response = await fetch("/api/acceptance-forms", { method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, body });
       const responseBody = await response.json();
       if (!response.ok) throw new Error(responseBody.error || "生成签字链接失败");
-      setResult({ ...responseBody, link: `https://acorder.de5.net/s/${responseBody.token}` });
+      const shareUrl = `${window.location.origin}/s/${responseBody.token}`;
+      setResult({ ...responseBody, link: shareUrl });
     } catch (e) { setError(e.message || "生成签字链接失败"); } finally { setSubmitting(false); }
   }
 

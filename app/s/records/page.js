@@ -37,7 +37,8 @@ function AcceptanceRecordsView() {
   async function copyLink(record) {
     setCopyingId(record.id);
     try {
-      await navigator.clipboard.writeText(`https://acorder.de5.net/s/${record.token}`);
+      const shareUrl = `${window.location.origin}/s/${record.token}`;
+      await navigator.clipboard.writeText(shareUrl);
     } catch (e) { setError(`复制链接失败：${e.message || "请检查浏览器权限"}`); }
     window.setTimeout(() => setCopyingId(null), 1500);
   }
