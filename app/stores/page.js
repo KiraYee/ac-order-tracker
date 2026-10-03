@@ -3,10 +3,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Loader2, MapPin, Pencil, Phone, Store, X } from "lucide-react";
+import { Loader2, MapPin, Pencil, Phone, Store, Trash2, X } from "lucide-react";
 import AppShell from "../components/AppShell";
 import { supabase } from "../../lib/supabaseClient";
-import { fmtDate, generateStoreName, orderFromDb, storeNameWithoutCity } from "../../lib/dataHelpers";
+import { fmtDate, generateStoreName, orderFromDb, storeNameWithoutCity, updateStoreForm } from "../../lib/dataHelpers";
 
 export default function StoresPage() {
   return (
@@ -119,6 +119,25 @@ function StoresView() {
     }
   }
 
+  async function deleteStore(store, relatedOrders) {
+    if (relatedOrders.length > 0) {
+      setErrorMsg(`门店“${store.store_name}”已关联 ${relatedOrders.length} 条工单，不能删除。请先处理工单关联。`);
+      return;
+    }
+    if (!window.confirm(`确定删除门店“${store.store_name}”吗？删除后不可恢复。`)) return;
+    try {
+      const { error } = await supabase.from("stores").delete().eq("id", store.id);
+      if (error) throw error;
+      setStores((prev) => prev.filter((item) => item.id !== store.id));
+      setSelectedId(null);
+      setEditingStore(null);
+      router.replace("/stores");
+      setErrorMsg(`门店“${store.store_name}”已删除`);
+    } catch (e) {
+      setErrorMsg("删除门店失败：" + (e.message || "未知错误"));
+    }
+  }
+
   return (
     <div className="stores-page" style={styles.page}>
       <div style={styles.headerRow}>
@@ -186,6 +205,7 @@ function StoresView() {
           recentServiceTime={selected.recentServiceTime}
           onClose={closeStore}
           onEdit={() => setEditingStore(selected.store)}
+          onDelete={() => deleteStore(selected.store, selected.relatedOrders)}
         />
       )}
 
@@ -217,7 +237,7 @@ function StoresView() {
   );
 }
 
-function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit }) {
+function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit, onDelete }) {
   return (
     <div className="stores-detail-overlay" style={styles.overlay} onClick={onClose}>
       <div className="stores-detail-panel" style={styles.panel} onClick={(e) => e.stopPropagation()}>
@@ -227,6 +247,7 @@ function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit }) {
           </div>
           <div style={styles.headerButtons}>
             <button type="button" style={styles.secondaryBtn} onClick={onEdit}><Pencil size={13} /> 编辑</button>
+            <button type="button" style={styles.deleteStoreBtn} onClick={onDelete}><Trash2 size={13} /> 删除</button>
             <button type="button" className="mobile-panel-close" style={styles.iconBtn} onClick={onClose}><X size={18} /></button>
           </div>
         </div>
@@ -268,11 +289,13 @@ function StoreDetail({ store, orders, recentServiceTime, onClose, onEdit }) {
 }
 
 function StoreForm({ initial, onClose, onSubmit }) {
+  const initialStoreName = initial.store_name?.trim()
+    || generateStoreName(initial.city, initial.brand, initial.mall);
   const [form, setForm] = useState({
     city: initial.city || "",
     brand: initial.brand || "",
     mall: initial.mall || "",
-    store_name: initial.store_name || "",
+    store_name: initialStoreName,
     address: initial.address || "",
     contact_name: initial.contact_name || "",
     contact_phone: initial.contact_phone || "",
@@ -284,15 +307,13 @@ function StoreForm({ initial, onClose, onSubmit }) {
   const update = (key, value) => {
     setForm((prev) => {
       if (["city", "brand", "mall"].includes(key) && !storeNameDirtyRef.current) {
-        const nextForm = { ...prev, [key]: value };
-        return {
-          ...nextForm,
-          store_name: generateStoreName(nextForm.city.trim(), nextForm.brand.trim(), nextForm.mall.trim()),
-        };
+        return updateStoreForm(prev, key, value);
       }
       return { ...prev, [key]: value };
     });
   };
+  const canSave = Boolean(form.city.trim() && form.brand.trim() && form.mall.trim() && form.store_name.trim());
+  const validationMessage = canSave ? "" : "请填写城市、品牌和商场，生成有效的门店名称后再保存";
   return (
     <div className="stores-form-overlay" style={styles.overlay} onClick={onClose}>
       <div className="stores-form-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -318,7 +339,8 @@ function StoreForm({ initial, onClose, onSubmit }) {
         </div>
         <div style={styles.formActions}>
           <button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button>
-          <button type="button" style={styles.primaryBtn} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button>
+          {!canSave && <div style={styles.formHint}>{validationMessage}</div>}
+          <button type="button" style={styles.primaryBtn} disabled={!canSave} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button>
         </div>
       </div>
     </div>
@@ -327,12 +349,8 @@ function StoreForm({ initial, onClose, onSubmit }) {
 
 function NewStoreForm({ onClose, onSubmit }) {
   const [form, setForm] = useState({ city: "", brand: "", mall: "", store_name: "", address: "", contact_name: "", contact_phone: "", special_requirements: "", notes: "", requires_construction_permit: false });
-  const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
-  useEffect(() => {
-    if (!form.store_name || form.store_name === generateStoreName(form.city, form.brand, form.mall)) {
-      update("store_name", generateStoreName(form.city.trim(), form.brand.trim(), form.mall.trim()));
-    }
-  }, [form.city, form.brand, form.mall]);
+  const update = (key, value) => setForm((prev) => updateStoreForm(prev, key, value));
+  const canSave = Boolean(form.city.trim() && form.brand.trim() && form.mall.trim() && form.store_name.trim());
   return (
     <div className="stores-form-overlay" style={styles.overlay} onClick={onClose}>
       <div className="stores-form-modal" style={styles.modal} onClick={(e) => e.stopPropagation()}>
@@ -341,7 +359,7 @@ function NewStoreForm({ onClose, onSubmit }) {
           <Field label="城市 *"><input style={styles.input} value={form.city} onChange={(e) => update("city", e.target.value)} /></Field>
           <Field label="品牌 *"><input style={styles.input} value={form.brand} onChange={(e) => update("brand", e.target.value)} /></Field>
           <Field label="商场 *"><input style={styles.input} value={form.mall} onChange={(e) => update("mall", e.target.value)} /></Field>
-          <Field label="门店名称"><input style={styles.input} value={form.store_name} onChange={(e) => update("store_name", e.target.value)} /></Field>
+          <Field label="门店名称"><div style={styles.readonlyField}>{form.store_name || "未生成门店名称"}</div></Field>
           <Field label="地址"><input style={styles.input} value={form.address} onChange={(e) => update("address", e.target.value)} /></Field>
           <Field label="联系人"><input style={styles.input} value={form.contact_name} onChange={(e) => update("contact_name", e.target.value)} /></Field>
           <Field label="联系电话"><input style={styles.input} value={form.contact_phone} onChange={(e) => update("contact_phone", e.target.value)} /></Field>
@@ -353,7 +371,7 @@ function NewStoreForm({ onClose, onSubmit }) {
             </div>
           </Field>
         </div>
-        <div style={styles.formActions}><button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!form.city.trim() || !form.brand.trim() || !form.mall.trim() || !form.store_name.trim()} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button></div>
+        <div style={styles.formActions}>{!canSave && <div style={styles.formHint}>请填写城市、品牌和商场，生成有效的门店名称后再保存</div>}<button type="button" style={styles.ghostBtn} onClick={onClose}>取消</button><button type="button" style={styles.primaryBtn} disabled={!canSave} onClick={() => onSubmit({ ...form, city: form.city.trim(), brand: form.brand.trim(), mall: form.mall.trim(), store_name: form.store_name.trim(), address: form.address.trim() || null, contact_name: form.contact_name.trim() || null, contact_phone: form.contact_phone.trim() || null, special_requirements: form.special_requirements.trim() || null, notes: form.notes.trim() || null, requires_construction_permit: !!form.requires_construction_permit })}>保存</button></div>
       </div>
     </div>
   );
@@ -402,6 +420,7 @@ const styles = {
   formBody: { flex: 1, minHeight: 0, padding: 20, overflowY: "auto" },
   iconBtn: { background: "#F4F7F6", border: "none", borderRadius: 8, padding: 6, display: "flex", color: "#4C6169" },
   secondaryBtn: { display: "flex", alignItems: "center", gap: 5, background: "#F4F7F6", border: "1px solid #E2E9E8", borderRadius: 7, padding: "6px 10px", fontSize: 12, color: "#4C6169" },
+  deleteStoreBtn: { display: "flex", alignItems: "center", gap: 5, background: "#F6E7E6", border: "1px solid #D9B8B5", borderRadius: 7, padding: "6px 10px", fontSize: 12, color: "#A23931", fontWeight: 600 },
   sectionTitle: { fontWeight: 700, color: "#145560", fontSize: 13, margin: "6px 0 10px" },
   infoGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 18 },
   infoItem: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, padding: "8px 10px", fontSize: 12, color: "#16262B" },
@@ -416,6 +435,7 @@ const styles = {
   readonlyField: { width: "100%", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, color: "#4C6169", background: "#F4F7F6", boxSizing: "border-box", minHeight: 35 },
   textarea: { width: "100%", minHeight: 76, resize: "vertical", border: "1px solid #E2E9E8", borderRadius: 7, padding: "8px 10px", fontSize: 13, outline: "none", color: "#16262B", background: "#fff", boxSizing: "border-box" },
   formActions: { flexShrink: 0, display: "flex", justifyContent: "flex-end", gap: 8, padding: "14px 20px", borderTop: "1px solid #E2E9E8", background: "#fff" },
+  formHint: { flex: 1, alignSelf: "center", color: "#A23931", fontSize: 12 },
   primaryBtn: { display: "flex", alignItems: "center", gap: 6, background: "#1F7A8C", color: "#fff", border: "none", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
   ghostBtn: { background: "#fff", color: "#4C6169", border: "1px solid #E2E9E8", borderRadius: 8, padding: "8px 14px", fontSize: 13, fontWeight: 600 },
   toggleRow: { display: "flex", gap: 6 },

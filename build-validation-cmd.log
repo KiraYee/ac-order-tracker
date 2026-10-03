@@ -1,0 +1,14 @@
+
+> ac-repair-tracker@0.1.0 build
+> next build
+
+  ▲ Next.js 14.2.5
+  - Environments: .env.local
+
+   Creating an optimized production build ...
+Failed to compile.
+
+Error: EISDIR: illegal operation on a directory, readlink 'D:\AAA空调\ac-repair-tracker\ac-repair-tracker\node_modules\next\dist\pages\_app.js'
+
+
+> Build failed because of webpack errors

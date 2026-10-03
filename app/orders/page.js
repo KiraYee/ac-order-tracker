@@ -6,6 +6,7 @@ import {
   Pencil, Link2, DollarSign, Users, Trash2, CircleDollarSign, Camera, FileText,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
+import { findOrCreateStore } from "../../lib/storeHelpers";
 import { pinyin } from "pinyin-pro";
 import * as XLSX from "xlsx";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -679,7 +680,7 @@ function OrdersView({ userEmail }) {
       const [{ data, error }, { data: advanceRows, error: advanceError }] = await Promise.all([
         supabase
           .from("orders")
-          .select("*, expense_records(*), visits(*, expense_records(*))")
+          .select("*, stores(*), expense_records(*), visits(*, expense_records(*))")
           .order("report_time", { ascending: false }),
         supabase.from("advances").select("expense_record_id, reimbursed"),
       ]);
@@ -706,7 +707,7 @@ function OrdersView({ userEmail }) {
     const [{ data, error }, { data: advanceRows, error: advanceError }] = await Promise.all([
       supabase
         .from("orders")
-        .select("*, expense_records(*), visits(*, expense_records(*))")
+        .select("*, stores(*), expense_records(*), visits(*, expense_records(*))")
         .eq("id", orderId)
         .single(),
       supabase.from("advances").select("expense_record_id, reimbursed"),
@@ -800,33 +801,29 @@ function OrdersView({ userEmail }) {
     } catch (e) { console.error("fetchAdvances failed:", e); }
   }
 
-  async function findStore(city, brand, mall) {
-    const cityValue = city.trim();
-    const brandValue = brand.trim();
-    const mallValue = mall.trim();
-    if ([cityValue, brandValue, mallValue].some((value) => !value)) return null;
-    const matchesStore = (store) => (
-      store?.city?.trim() === cityValue &&
-      store?.brand?.trim() === brandValue &&
-      store?.mall?.trim() === mallValue
-    );
-    const cached = stores.find(matchesStore);
-    if (cached) return cached;
+  async function searchStores(keyword) {
+    const value = keyword.trim();
+    if (!value) return [];
+    const lower = value.toLowerCase();
+    const escapedValue = value.replace(/[%_,]/g, (character) => `\\${character}`);
+    const cached = stores.filter((store) => [store.store_name, store.mall, store.brand, store.city]
+      .filter(Boolean)
+      .some((field) => field.toLowerCase().includes(lower)));
     const { data, error } = await supabase
       .from("stores")
       .select("*")
-      .eq("city", cityValue)
-      .eq("brand", brandValue)
-      .eq("mall", mallValue)
-      .limit(1)
-      .maybeSingle();
+      .or(`store_name.ilike.%${escapedValue}%,mall.ilike.%${escapedValue}%,brand.ilike.%${escapedValue}%,city.ilike.%${escapedValue}%`)
+      .order("city")
+      .order("brand")
+      .order("mall")
+      .limit(20);
     if (error) throw error;
-    return matchesStore(data) ? data : null;
+    const merged = new Map([...cached, ...(data || [])].map((store) => [store.id, store]));
+    return Array.from(merged.values()).slice(0, 20);
   }
 
   async function createStore(data) {
-    const { data: row, error } = await supabase.from("stores").insert(data).select().single();
-    if (error) throw error;
+    const row = await findOrCreateStore(supabase, data);
     setStores((prev) => [...prev, row]);
     return row;
   }
@@ -924,6 +921,10 @@ function OrdersView({ userEmail }) {
 
   async function addOrder(data) {
     try {
+      const cityValue = (data.city || "").trim();
+      const brandValue = (data.brand || "").trim();
+      const mallValue = (data.mall || "").trim();
+      if (!brandValue) throw new Error("请填写品牌方；品牌方是门店身份的一部分");
       const [cityItem, brandItem] = await Promise.all([
         data.city ? addVocabulary("cities", data.city, setCities) : null,
         data.brand ? addVocabulary("brands", data.brand, setBrands) : null,
@@ -940,6 +941,16 @@ function OrdersView({ userEmail }) {
         .like("ticket_no", `${reportPrefix}%`);
       if (ticketError) throw ticketError;
       const ticketNo = ticketNoFromReportTime(reportTime, (matchingTickets || []).map((row) => row.ticket_no));
+      const storeIdentity = data.storeId
+        ? null
+        : cityValue && brandValue && mallValue
+          ? await findOrCreateStore(supabase, { city: cityValue, brand: brandValue, mall: mallValue })
+          : null;
+      if (storeIdentity) setStores((prev) => prev.some((store) => store.id === storeIdentity.id) ? prev : [...prev, storeIdentity]);
+      const storeId = data.storeId || storeIdentity?.id || null;
+      const unlinkedStoreWarning = !storeId
+        ? "未关联门店，门店信息不会被其他工单复用"
+        : "";
       const { data: row, error } = await supabase
         .from("orders")
         .insert({
@@ -965,19 +976,19 @@ function OrdersView({ userEmail }) {
           client_id: data.clientId || null,
           follower_id: data.followerId || null,
           assigned_technician_id: data.assignedTechnicianId || null,
-          store_id: data.storeId || null,
+          store_id: storeId,
         })
         .select()
         .single();
       if (error) throw error;
       const newOrder = {
         ...orderFromDb({ ...row, visits: [] }),
-        store: stores.find((store) => store.id === data.storeId) || null,
+        store: stores.find((store) => store.id === storeId) || storeIdentity || null,
       };
       setOrders((prev) => [newOrder, ...prev].sort((a, b) => new Date(b.reportTime) - new Date(a.reportTime)));
       setShowNewOrder(false);
       openOrder(newOrder.id);
-      setErrorMsg("");
+      setErrorMsg(unlinkedStoreWarning);
     } catch (e) {
       setErrorMsg("创建工单失败：" + (e.message || "未知错误"));
     }
@@ -1509,7 +1520,7 @@ function OrdersView({ userEmail }) {
           onAddFeePreset={addFeePreset}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
-          onFindStore={findStore}
+          onSearchStores={searchStores}
           onCreateStore={createStore}
           onPatch={(camel) => patchOrder(selected.id, camel)}
           onSaveQuotes={(items, note) => saveQuotes(selected.id, items, note)}
@@ -1563,7 +1574,7 @@ function OrdersView({ userEmail }) {
           employees={employees}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
-           onFindStore={findStore}
+           onSearchStores={searchStores}
            onCreateStore={createStore}
         />
       )}
@@ -1744,7 +1755,16 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
     const s = search.trim().toLowerCase();
     return orders
       .filter((o) => o.id !== currentId)
-      .filter((o) => `${o.mall} ${o.ticketNo} ${o.issueDesc} ${o.city || ""}`.toLowerCase().includes(s))
+      .filter((o) => [
+        o.mall,
+        o.ticketNo,
+        o.issueDesc,
+        o.city,
+        o.brand,
+        o.store?.store_name,
+        o.store?.mall,
+        o.store?.brand,
+      ].filter(Boolean).join(" ").toLowerCase().includes(s))
       .slice(0, 6);
   }, [search, orders, currentId]);
 
@@ -1761,9 +1781,9 @@ function RelatedOrderField({ orders, currentId, valueId, onChange }) {
 
   return (
     <div>
-      <input
+        <input
         style={styles.input}
-        placeholder="搜索商场名或工单号"
+          placeholder="搜索门店、商场、品牌或工单号"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
       />
@@ -2911,7 +2931,84 @@ function Field({ label, children }) {
   );
 }
 
-function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], stores = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee, onFindStore, onCreateStore }) {
+function StoreAutocomplete({ value, stores, onSearch, onSelect, onCreate }) {
+  const [query, setQuery] = useState(value || "");
+  const [results, setResults] = useState([]);
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => setQuery(value || ""), [value]);
+  useEffect(() => {
+    const handleOutsideClick = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  useEffect(() => {
+    const keyword = query.trim();
+    if (!keyword) {
+      setResults([]);
+      return undefined;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      try {
+        const found = await onSearch(keyword);
+        if (!cancelled) setResults(found || []);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, onSearch]);
+
+  return (
+    <div ref={wrapRef} style={styles.searchableWrap}>
+      <input
+        style={styles.input}
+        value={query}
+        placeholder="输入门店名或商场名"
+        onFocus={() => setOpen(true)}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          onSelect(null, event.target.value);
+          setOpen(true);
+        }}
+      />
+      {open && query.trim() && (
+        <div style={styles.searchableMenu}>
+          {loading && <div style={styles.searchableEmpty}>搜索中…</div>}
+          {!loading && results.map((store) => (
+            <button type="button" key={store.id} style={styles.searchableItem} onClick={() => {
+              setQuery(store.store_name || store.mall);
+              setOpen(false);
+              onSelect(store);
+            }}>
+              <span>{store.city} · {store.brand} · {store.mall} · {store.store_name}</span>
+            </button>
+          ))}
+          {!loading && !results.length && (
+            <button type="button" style={styles.searchableCreate} onClick={() => {
+              setOpen(false);
+              onCreate(query.trim());
+            }}>
+              新建门店：{query.trim()}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], stores = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee, onSearchStores, onCreateStore }) {
   const [city, setCity] = useState("");
   const [mall, setMall] = useState("");
   const [brand, setBrand] = useState("");
@@ -2944,46 +3041,9 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    const cityValue = city.trim();
-    const brandValue = brand.trim();
-    const mallValue = mall.trim();
-    if (!cityValue || !brandValue || !mallValue) {
-      setSelectedStore(null);
-      setStoreMessage("");
-      setStoreName("");
-      return undefined;
-    }
-    const timer = setTimeout(async () => {
-      try {
-        const store = await onFindStore(cityValue, brandValue, mallValue);
-        if (cancelled) return;
-        const matchedStore = store && store.city?.trim() === cityValue && store.brand?.trim() === brandValue && store.mall?.trim() === mallValue
-          ? store
-          : null;
-        setSelectedStore(matchedStore);
-        if (matchedStore) {
-          setStoreName(matchedStore.store_name || generateStoreName(cityValue, brandValue, mallValue));
-          setStoreMessage("已找到历史门店");
-          return;
-        }
-        setSelectedStore(null);
-        setStoreName(generateStoreName(cityValue, brandValue, mallValue));
-        setStoreMessage("未找到历史门店");
-      } catch (e) {
-        if (!cancelled) setStoreMessage("门店查询失败，请稍后重试");
-      }
-    }, 250);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [city, brand, mall, onFindStore]);
-
   async function submit() {
-    if (!mall.trim() || !issueDesc.trim()) {
-      setErr("请至少填写商场名称和故障描述");
+    if (!city.trim() || !mall.trim() || !brand.trim() || !issueDesc.trim()) {
+      setErr(!brand.trim() ? "请填写品牌方；品牌方是门店身份的一部分" : "请至少填写城市、商场名称和故障描述");
       return;
     }
     setSubmitting(true);
@@ -3005,6 +3065,7 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       reportTime: new Date(reportTime).toISOString(),
       relatedOrderId,
       storeId: selectedStore?.id || null,
+      storeName,
     });
     setSubmitting(false);
   }
@@ -3021,10 +3082,34 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
             <Field label="城市">
               <CityInput value={city} cities={cities} onChange={setCity} onCreate={onCreateCity} />
             </Field>
-            <Field label="商场 *">
-              <input style={styles.input} value={mall} onChange={(e) => setMall(e.target.value)} placeholder="如：断桥万达" />
+            <Field label="商场 / 门店 *">
+              <StoreAutocomplete
+                value={mall}
+                stores={stores}
+                onSearch={onSearchStores}
+                onSelect={(store, typedValue) => {
+                  if (!store) {
+                    setSelectedStore(null);
+                    setMall(typedValue || "");
+                    return;
+                  }
+                  setSelectedStore(store);
+                  setCity(store.city || "");
+                  setBrand(store.brand || "");
+                  setMall(store.mall || "");
+                  setStoreName(store.store_name || "");
+                  setStoreMessage(`已选择门店：${store.store_name}`);
+                }}
+                onCreate={(typedName) => {
+                  setSelectedStore(null);
+                  setMall(typedName);
+                  setStoreName(typedName);
+                  setStoreMessage(`新建门店：${typedName}`);
+                  setShowStoreForm(true);
+                }}
+              />
             </Field>
-            <Field label="品牌方">
+            <Field label="品牌方 *">
               <SearchableCreatable label="品牌方" value={brand} items={brands} onChange={setBrand} onCreate={onCreateBrand} placeholder="搜索或输入品牌，如格力 / gl" />
             </Field>
           </div>
