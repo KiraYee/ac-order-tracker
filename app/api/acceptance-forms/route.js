@@ -6,7 +6,8 @@ export const runtime = "nodejs";
 const MAX_FILE_SIZE = 20 * 1024 * 1024;
 
 function makeToken() {
-  return randomBytes(24).toString("base64url");
+  // 16 lowercase hexadecimal characters: URL-safe without mixed-case symbols.
+  return randomBytes(8).toString("hex");
 }
 
 export async function POST(request) {
