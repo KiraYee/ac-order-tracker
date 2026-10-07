@@ -8,7 +8,8 @@ import AppShell from "./components/AppShell";
 import OverviewAnomalyList from "./components/OverviewAnomalyList";
 import OverviewFinanceSummary from "./components/OverviewFinanceSummary";
 import OverviewResourceDistribution from "./components/OverviewResourceDistribution";
-import { getFinanceSummary, getOrderExceptions, orderFromDb, orderStoreDisplay } from "../lib/dataHelpers";
+import { getFinanceSummary, getOrderExceptions, getReceivableConsistency, orderFromDb, orderStoreDisplay } from "../lib/dataHelpers";
+import { financeFilterOptions, financeRangeDisplayLabel, useFinanceTimeFilter } from "../lib/financeTime";
 
 export default function DashboardPage() {
   return <AppShell active="dashboard"><DashboardContent /></AppShell>;
@@ -21,6 +22,8 @@ function DashboardContent() {
   const [advances, setAdvances] = useState([]);
   const [loading, setLoading] = useState(true);
   const [now, setNow] = useState(() => Date.now());
+  const { filters, setFilters, bounds } = useFinanceTimeFilter();
+  const label = financeRangeDisplayLabel(filters);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 60000);
@@ -55,7 +58,21 @@ function DashboardContent() {
       location: [display.city, display.mall, display.brand].filter(Boolean).join(" · ") || "未填写品牌",
     }];
   }), [orders, now]);
-  const financeSummary = useMemo(() => getFinanceSummary(orders, advances), [orders, advances]);
+  const filteredOrders = useMemo(() => orders.filter((order) => financeFilterOptions(filters, bounds, "client", order, orders)), [orders, filters, bounds]);
+  const filteredAdvances = useMemo(() => advances.filter((advance) => financeFilterOptions(filters, bounds, "advance", advance, orders)), [advances, orders, filters, bounds]);
+  const receivableConsistency = useMemo(() => getReceivableConsistency(orders, bounds), [orders, bounds]);
+  const financeSummary = useMemo(() => ({
+    ...getFinanceSummary(filteredOrders, filteredAdvances),
+    receivableTotal: receivableConsistency.current.amount,
+    receivableCount: receivableConsistency.current.count,
+  }), [filteredOrders, filteredAdvances, receivableConsistency]);
+  const historySummary = receivableConsistency.history;
+
+  useEffect(() => {
+    if (!receivableConsistency.isConsistent) {
+      console.error("财务应收一致性校验失败", receivableConsistency);
+    }
+  }, [receivableConsistency]);
 
   if (loading) return <div className="overview-loading"><Loader2 size={22} /><span>加载总览数据中…</span></div>;
 
@@ -65,7 +82,7 @@ function DashboardContent() {
       <Link href="/orders" className="overview-top-link">工单列表 <span>›</span></Link>
     </header>
     <OverviewAnomalyList items={anomalies} />
-    <OverviewFinanceSummary summary={financeSummary} />
+    <OverviewFinanceSummary summary={financeSummary} historySummary={historySummary} label={label} filters={filters} setFilters={setFilters} />
     <OverviewResourceDistribution technicians={technicians} stores={stores} />
   </main>;
 }

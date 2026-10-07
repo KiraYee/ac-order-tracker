@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import * as XLSX from "xlsx";
 import {
-  Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle, Pencil,
+  Wallet, Loader2, CircleDollarSign, Plus, X, CheckCircle2, AlertTriangle, Pencil, History,
 } from "lucide-react";
 import { supabase } from "../../lib/supabaseClient";
 import AppShell from "../components/AppShell";
-import { orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal, orderTechnicianUnpaidCostTotal, orderTechnicianFeeRecords, expenseSettlementMeta } from "../../lib/dataHelpers";
+import { getReceivableConsistency, orderFromDb, orderStoreDisplay, fmtDateShort, orderChargeTotal, orderTechnicianCostTotal, orderTechnicianUnpaidCostTotal, orderTechnicianFeeRecords, expenseSettlementMeta } from "../../lib/dataHelpers";
+import { financeFilterOptions, financeItemDate, financeRangeDisplayLabel, useFinanceTimeFilter } from "../../lib/financeTime";
 
 export default function FinancePage() {
   return (
@@ -29,7 +30,9 @@ function FinanceView({ userEmail }) {
   const [tab, setTab] = useState("receivable"); // receivable | payable | advances
   const [showNewAdvance, setShowNewAdvance] = useState(false);
   const [editingAdvance, setEditingAdvance] = useState(null);
-  const [financeFilters, setFinanceFilters] = useState({ range: "all", start: "", end: "", storeId: "", followerId: "", technicianId: "", employeeName: "" });
+  const { filters: timeFilters, setFilters: setTimeFilters, bounds } = useFinanceTimeFilter();
+  const timeLabel = financeRangeDisplayLabel(timeFilters);
+  const [financeFilters, setFinanceFilters] = useState({ storeId: "", followerId: "", technicianId: "", employeeName: "" });
   const searchParams = useSearchParams();
   const [targetRowId, setTargetRowId] = useState(null);
 
@@ -212,22 +215,27 @@ function FinanceView({ userEmail }) {
   }
 
   // 应收：已完成但甲方未结算的工单
-  const receivables = useMemo(
-    () => orders.filter((o) => orderChargeTotal(o) > 0),
-    [orders]
-  );
-  const pendingReceivables = receivables.filter((o) => !o.clientSettled);
-  const receivableTotal = pendingReceivables.reduce((s, o) => s + orderChargeTotal(o), 0);
+  const combinedFilters = { ...timeFilters, ...financeFilters };
+  const filteredOrders = useMemo(() => orders.filter((order) => financeFilterOptions(combinedFilters, bounds, "client", order, orders)), [orders, combinedFilters, bounds]);
+  const filteredAdvances = useMemo(() => advances.filter((advance) => financeFilterOptions(combinedFilters, bounds, "advance", advance, orders)), [advances, orders, combinedFilters, bounds]);
+  const receivableScopeOrders = useMemo(() => orders.filter((order) => (
+    (!financeFilters.storeId || order.storeId === financeFilters.storeId)
+    && (!financeFilters.followerId || order.followerId === financeFilters.followerId)
+  )), [orders, financeFilters.storeId, financeFilters.followerId]);
+  const receivableConsistency = useMemo(() => getReceivableConsistency(receivableScopeOrders, bounds), [receivableScopeOrders, bounds]);
+  const receivables = useMemo(() => filteredOrders.filter((o) => orderChargeTotal(o) > 0), [filteredOrders]);
+  const pendingReceivables = receivableConsistency.current.orders;
+  const receivableTotal = receivableConsistency.current.amount;
 
   // 应付师傅：只统计 expense_records.type=technician_fee，不包含保险费等其他成本
-  const technicianPayableTotal = orders.reduce((sum, order) => sum + orderTechnicianCostTotal(order), 0);
-  const technicianUnpaidTotal = orders.reduce(
+  const technicianPayableTotal = filteredOrders.reduce((sum, order) => sum + orderTechnicianCostTotal(order), 0);
+  const technicianUnpaidTotal = filteredOrders.reduce(
     (sum, order) => sum + orderTechnicianUnpaidCostTotal(order),
     0
   );
   const technicianPaidTotal = technicianPayableTotal - technicianUnpaidTotal;
   const payables = useMemo(() => {
-    return orders.flatMap((order) => orderTechnicianFeeRecords(order, technicians).map((record) => ({
+    return filteredOrders.flatMap((order) => orderTechnicianFeeRecords(order, technicians).map((record) => ({
       order,
       record,
       id: record.id,
@@ -235,7 +243,7 @@ function FinanceView({ userEmail }) {
        unpaidCost: record.isSettled !== true ? Number(record.amount) || 0 : 0,
       techName: record.technicianName,
     }))).sort((a, b) => new Date(b.order.updatedAt) - new Date(a.order.updatedAt));
-  }, [orders, technicians]);
+  }, [filteredOrders, technicians]);
   const groupedPayables = useMemo(() => {
     const groups = new Map();
     for (const payable of payables) {
@@ -271,12 +279,19 @@ function FinanceView({ userEmail }) {
   const payableTotal = payables.reduce((s, p) => s + p.unpaidCost, 0);
 
   // 垫付待报销
-  const pendingAdvances = advances.filter((a) => !a.reimbursed);
+  const pendingAdvances = filteredAdvances.filter((a) => !a.reimbursed);
   const pendingAdvanceTotal = pendingAdvances.reduce((s, a) => s + (Number(a.amount) || 0), 0);
   const completedReceivables = receivables.filter((o) => o.clientSettled);
   const completedPayables = groupedPayables.filter((p) => p.settled);
   const pendingPayables = groupedPayables.filter((p) => !p.settled);
-  const completedAdvances = advances.filter((a) => a.reimbursed);
+  const completedAdvances = filteredAdvances.filter((a) => a.reimbursed);
+  const historySummary = receivableConsistency.history;
+
+  useEffect(() => {
+    if (!receivableConsistency.isConsistent) {
+      console.error("财务应收一致性校验失败", receivableConsistency);
+    }
+  }, [receivableConsistency]);
 
   if (loading) {
     return (
@@ -295,6 +310,7 @@ function FinanceView({ userEmail }) {
           <div style={styles.title}>财务</div>
           <div style={styles.subtitle}>客户费用结算 / 师傅费用结算 / 垫付报销</div>
         </div>
+        <FinanceTimeFilterControls filters={timeFilters} onChange={setTimeFilters} />
       </div>
 
       {errorMsg && (
@@ -306,25 +322,30 @@ function FinanceView({ userEmail }) {
       <div className="finance-stats-grid" style={styles.statsGrid}>
         <div style={{ ...styles.statCard, borderColor: "#E08E3340" }}>
           <div style={styles.statNum}>¥{receivableTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>应收甲方（{receivables.length} 单未结算）</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "应收甲方" : `${timeLabel}应收甲方`} · {pendingReceivables.length} 单未结算</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#C1443D40" }}>
           <div style={styles.statNum}>¥{technicianPayableTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>应付师傅（全部服务记录）</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "应付师傅" : `${timeLabel}应付师傅`}</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#A5661A40" }}>
           <div style={styles.statNum}>¥{technicianUnpaidTotal.toLocaleString()}</div>
-        <div style={styles.statLabel}>未支付师傅款（{pendingPayables.length} 笔）</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "未支付师傅款" : `${timeLabel}未支付师傅款`}（{pendingPayables.length} 笔）</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#3E8F6340" }}>
           <div style={styles.statNum}>¥{technicianPaidTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>已支付师傅款</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "已支付师傅款" : `${timeLabel}已支付师傅款`}</div>
         </div>
         <div style={{ ...styles.statCard, borderColor: "#1F7A8C40" }}>
           <div style={styles.statNum}>¥{pendingAdvanceTotal.toLocaleString()}</div>
-          <div style={styles.statLabel}>待报销（{pendingAdvances.length} 笔）</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "待报销" : `${timeLabel}待报销`}（{pendingAdvances.length} 笔）</div>
+        </div>
+        <div style={{ ...styles.statCard, borderColor: "#6C63A840" }}>
+          <div style={styles.statNum}>¥{filteredOrders.reduce((sum, order) => sum + (orderChargeTotal(order) - orderTechnicianCostTotal(order)), 0).toLocaleString()}</div>
+          <div style={styles.statLabel}>{timeLabel === "全部" ? "利润" : `${timeLabel}利润`} · {timeLabel === "全部" ? "全部订单" : `${timeLabel}完工订单`}</div>
         </div>
       </div>
+      {historySummary.count > 0 && <button type="button" className="finance-history-hint" style={styles.historyHint} onClick={() => setTimeFilters({ range: "all", start: "", end: "" })}><History size={13} /> <span>历史未结算 <strong>¥{historySummary.amount.toLocaleString()}</strong>（{historySummary.count} 单）</span></button>}
 
       <div className="finance-tabs" style={styles.tabs}>
         <button style={{ ...styles.tab, ...(tab === "receivable" ? styles.tabActive : {}) }} onClick={() => setTab("receivable")}>
@@ -340,10 +361,11 @@ function FinanceView({ userEmail }) {
           全部
         </button>
       </div>
+      <FinanceFilterControls filters={combinedFilters} onFilter={setFinanceFilters} stores={stores} employees={employees} />
 
-      {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
+      {tab === "receivable" && <FinanceFilteredGroups kind="client" pending={pendingReceivables} completed={completedReceivables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={combinedFilters} bounds={bounds} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(o, options) => <FinanceOrderRow key={o.id} order={o} kind="client" amount={orderChargeTotal(o)} settled={o.clientSettled} settledAt={o.clientSettledAt} showTypeTag={false} showSettlementDate={options.showSettlementDate} onSettle={() => toggleClientSettled(o)} />} />}
 
-      {tab === "payable" && <FinanceFilteredGroups kind="technician" targetRowId={targetRowId} pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={financeFilters} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <TechnicianPayableRow key={p.id} item={p} highlight={targetRowId === `expense-${p.records[0]?.id}`} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
+      {tab === "payable" && <FinanceFilteredGroups kind="technician" targetRowId={targetRowId} pending={pendingPayables} completed={completedPayables} orders={orders} stores={stores} technicians={technicians} employees={employees} filters={combinedFilters} bounds={bounds} setFilters={setFinanceFilters} onBatchSettle={batchSettle} render={(p, options) => <TechnicianPayableRow key={p.id} item={p} highlight={targetRowId === `expense-${p.records[0]?.id}`} showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(p)} />} />}
 
       {tab === "advances" && (
         <div>
@@ -361,7 +383,8 @@ function FinanceView({ userEmail }) {
             stores={stores}
             technicians={technicians}
             employees={employees}
-            filters={financeFilters}
+            filters={combinedFilters}
+            bounds={bounds}
             setFilters={setFinanceFilters}
             onBatchSettle={batchSettle}
             render={(a, options) => (
@@ -381,7 +404,8 @@ function FinanceView({ userEmail }) {
       )}
 
       {tab === "all" && (
-        <FinanceSectionGroup
+        <div>
+          <FinanceSectionGroup
           pending={[
             ...pendingReceivables.map((o) => ({ kind: "client", createdAt: o.createdAt, item: o })),
             ...pendingPayables.map((p) => ({ kind: "technician", createdAt: p.order.createdAt, item: p })),
@@ -398,7 +422,8 @@ function FinanceView({ userEmail }) {
             : entry.kind === "technician"
               ? <FinanceOrderRow key={`technician-${entry.item.record.id}`} order={entry.item.order} kind="technician" amount={entry.item.amount} settled={entry.item.record.isSettled === true} settledAt={entry.item.record.settledAt} statusFee={{ ...entry.item.record, settled: entry.item.record.isSettled === true }} suffix={`${entry.item.techName}${entry.item.record.visitNumber ? ` · 第${entry.item.record.visitNumber}次上门` : ""}`} showTypeTag showSettlementDate={options.showSettlementDate} onSettle={() => toggleTechnicianSettled(entry.item)} />
               : <FinanceAdvanceRow key={`advance-${entry.item.id}`} advance={entry.item} orders={orders} showTypeTag showSettlementDate={options.showSettlementDate} onEdit={() => setEditingAdvance(entry.item)} onToggle={() => toggleReimbursed(entry.item)} />}
-        />
+          />
+        </div>
       )}
 
       {(showNewAdvance || editingAdvance) && (
@@ -420,7 +445,24 @@ function FinanceView({ userEmail }) {
   );
 }
 
-function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, stores, technicians, employees, filters, setFilters, onBatchSettle, render }) {
+function FinanceTimeFilterControls({ filters, onChange }) {
+  return <div style={styles.timeFilterGroup}>
+    <label style={styles.timeFilterLabel}>时间范围</label>
+    <select style={styles.filterInput} value={filters.range} onChange={(e) => onChange({ range: e.target.value })}>
+      <option value="month">本月</option><option value="last_month">上月</option><option value="quarter">本季度</option><option value="year">今年</option><option value="all">全部</option><option value="custom">自定义</option>
+    </select>
+    {filters.range === "custom" && <><input aria-label="开始日期" style={styles.filterInput} type="date" value={filters.start} onChange={(e) => onChange({ start: e.target.value })} /><span style={styles.dateSeparator}>至</span><input aria-label="结束日期" style={styles.filterInput} type="date" value={filters.end} onChange={(e) => onChange({ end: e.target.value })} /></>}
+  </div>;
+}
+
+function FinanceFilterControls({ filters, onFilter, stores, employees }) {
+  return <div className="finance-filter-bar" style={styles.filterBar}>
+    <select style={styles.filterInput} value={filters.storeId} onChange={(e) => onFilter((current) => ({ ...current, storeId: e.target.value }))}><option value="">全部门店</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.store_name}</option>)}</select>
+    <select style={styles.filterInput} value={filters.followerId} onChange={(e) => onFilter((current) => ({ ...current, followerId: e.target.value }))}><option value="">全部跟单人</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select>
+  </div>;
+}
+
+function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, stores, technicians, employees, filters, bounds, setFilters, onBatchSettle, render }) {
   const [completedOpen, setCompletedOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
 
@@ -430,27 +472,15 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
   }, [targetRowId, completed, kind]);
 
   const orderForItem = (item) => kind === "advance" ? orders.find((order) => order.id === item.order_id) : kind === "technician" ? item.order : item;
+  const dateForItem = (item) => financeItemDate(item, kind);
   const amountForItem = (item) => kind === "advance"
     ? Number(item.amount) || 0
     : kind === "technician"
       ? Number(item.amount) || 0
       : orderChargeTotal(item);
-  const dateForItem = (item) => kind === "advance" ? item.created_at : kind === "technician" ? item.order.createdAt : item.createdAt;
   const matchesFilters = (item) => {
     const order = orderForItem(item);
-    const date = new Date(dateForItem(item)).getTime();
-    const start = filters.range === "month" ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
-      : filters.range === "last_month" ? new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1).getTime()
-        : filters.start ? new Date(`${filters.start}T00:00:00`).getTime() : null;
-    const end = filters.range === "month" ? Date.now()
-      : filters.range === "last_month" ? new Date(new Date().getFullYear(), new Date().getMonth(), 1).getTime()
-        : filters.end ? new Date(`${filters.end}T23:59:59`).getTime() : null;
-    if (start && date < start) return false;
-    if (end && date > end) return false;
-    if (filters.storeId && order?.storeId !== filters.storeId) return false;
-    if (filters.followerId && order?.followerId !== filters.followerId) return false;
-    if (kind === "technician" && filters.technicianId && item.technicianId !== filters.technicianId) return false;
-    if (kind === "advance" && filters.employeeName && item.employee_name !== filters.employeeName) return false;
+    if (!financeFilterOptions(filters, bounds, kind, item, orders)) return false;
     return true;
   };
   const filteredPending = pending.filter(matchesFilters);
@@ -514,14 +544,10 @@ function FinanceFilteredGroups({ kind, targetRowId, pending, completed, orders, 
 
   return (
     <div>
-      <div className="finance-filter-bar" style={styles.filterBar}>
-        <select style={styles.filterInput} value={filters.range} onChange={(e) => updateFilter("range", e.target.value)}><option value="all">全部时间</option><option value="month">本月</option><option value="last_month">上月</option><option value="custom">自定义</option></select>
-        {filters.range === "custom" && <><input style={styles.filterInput} type="date" value={filters.start} onChange={(e) => updateFilter("start", e.target.value)} /><input style={styles.filterInput} type="date" value={filters.end} onChange={(e) => updateFilter("end", e.target.value)} /></>}
-        <select style={styles.filterInput} value={filters.storeId} onChange={(e) => updateFilter("storeId", e.target.value)}><option value="">全部门店</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.store_name}</option>)}</select>
-        <select style={styles.filterInput} value={filters.followerId} onChange={(e) => updateFilter("followerId", e.target.value)}><option value="">全部跟单人</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select>
+      {(kind === "technician" || kind === "advance") && <div className="finance-filter-bar" style={styles.filterBar}>
         {kind === "technician" && <select style={styles.filterInput} value={filters.technicianId} onChange={(e) => updateFilter("technicianId", e.target.value)}><option value="">全部师傅</option>{technicians.map((tech) => <option key={tech.id} value={tech.id}>{tech.name}</option>)}</select>}
         {kind === "advance" && <select style={styles.filterInput} value={filters.employeeName} onChange={(e) => updateFilter("employeeName", e.target.value)}><option value="">全部垫付人</option>{employees.map((employee) => <option key={employee.id} value={employee.name}>{employee.name}</option>)}</select>}
-      </div>
+      </div>}
       <div style={styles.groupTitle}>待处理（{filteredPending.length}）</div>
       <label style={styles.selectAllRow}><input type="checkbox" checked={allSelected} onChange={(e) => setSelectedIds(e.target.checked ? filteredPending.map((item) => item.id) : [])} /> 全选当前筛选结果</label>
       {filteredPending.length > 0 ? <div style={styles.list}>{filteredPending.map((item) => <div key={item.id} style={styles.batchRow}><input type="checkbox" checked={selectedIds.includes(item.id)} onChange={(e) => setSelectedIds((current) => e.target.checked ? [...current, item.id] : current.filter((id) => id !== item.id))} />{render(item, { showSettlementDate: false })}</div>)}</div> : <EmptyState text="没有符合筛选条件的待处理记录" />}
@@ -716,12 +742,15 @@ function Field({ label, children }) {
 
 const styles = {
   page: { padding: "28px 32px", maxWidth: 1100 },
-  headerRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", marginBottom: 20 },
+  headerRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-end", gap: 16, flexWrap: "wrap", marginBottom: 20 },
+  timeFilterGroup: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" },
+  timeFilterLabel: { color: "#4C6169", fontSize: 12, fontWeight: 600 },
+  dateSeparator: { color: "#8FA1A8", fontSize: 12 },
   title: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22 },
   subtitle: { fontSize: 12.5, color: "#8FA1A8", marginTop: 4 },
   errorBar: { background: "#F6E7E6", color: "#A23931", fontSize: 12.5, padding: "10px 14px", borderRadius: 8, display: "flex", alignItems: "center", gap: 6, marginBottom: 12 },
   centerState: { display: "flex", justifyContent: "center", padding: "60px 0" },
-  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12, marginBottom: 20 },
+  statsGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12, marginBottom: 0 },
   statCard: { background: "#fff", border: "1px solid", borderRadius: 12, padding: "14px 16px" },
   statNum: { fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 19 },
   statLabel: { fontSize: 11, color: "#8FA1A8", marginTop: 4 },
@@ -738,6 +767,7 @@ const styles = {
   completedPreview: { color: "#8FA1A8", fontSize: 11.5, lineHeight: 1.7 },
   completedActions: { display: "flex", gap: 6, alignItems: "center", marginTop: 10 },
   completedEmpty: { color: "#8FA1A8", fontSize: 12, padding: "10px 0 18px" },
+  historyHint: { display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: "#8FA1A8", fontSize: 12, padding: "12px 0 16px", cursor: "pointer" },
   emptyState: { display: "flex", flexDirection: "column", alignItems: "center", padding: "50px 0", background: "#fff", border: "1px dashed #E2E9E8", borderRadius: 12 },
   list: { display: "flex", flexDirection: "column", gap: 8, paddingBottom: 32 },
   row: { display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: "12px 14px", flexWrap: "wrap", gap: 10 },

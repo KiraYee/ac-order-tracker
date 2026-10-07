@@ -1090,3 +1090,7 @@ textarea {
     white-space: normal;
   }
 }
+
+.finance-history-hint:hover {
+  text-decoration: underline;
+}
