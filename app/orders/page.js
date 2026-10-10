@@ -16,7 +16,7 @@ import WorkOrderCard from "../components/WorkOrderCard";
 import OrderTimeoutNotice from "../components/OrderTimeoutNotice";
 import {
   STATUSES, STATUS_STYLE, RESULT_TYPES, resultMeta, fmtDate, daysSince, WORKLIST_GROUPS, getWorklistGroup,
-  getOrderExceptions,
+  getOrderExceptions, isMissingAcceptance,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
   itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor, expenseSettlementMeta, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
@@ -83,6 +83,11 @@ function AcceptancePhotoUploader({ order, onPatch }) {
   const photoUrl = order.acceptancePhotoUrl || "";
 
   async function uploadPhoto(event) {
+    if (order.noAcceptanceRequired) {
+      setError("该工单已标记为不需要验收单，不能上传验收单照片。");
+      event.target.value = "";
+      return;
+    }
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
@@ -147,7 +152,7 @@ function AcceptancePhotoUploader({ order, onPatch }) {
           )}
           <div style={styles.acceptanceUploadActions}>
             <input ref={inputRef} type="file" accept="image/*" onChange={uploadPhoto} style={{ display: "none" }} />
-            <button type="button" style={styles.smallPrimaryBtn} onClick={() => inputRef.current?.click()} disabled={isUploading || isDeleting}>
+            <button type="button" style={styles.smallPrimaryBtn} onClick={() => inputRef.current?.click()} disabled={isUploading || isDeleting || order.noAcceptanceRequired}>
               {isUploading ? <><Loader2 size={13} className="spin" /> 上传中…</> : photoUrl ? "替换照片" : "选择图片上传"}
             </button>
             {photoUrl && <button type="button" style={styles.smallDangerBtn} onClick={deletePhoto} disabled={isUploading || isDeleting}>{isDeleting ? "删除中…" : "删除"}</button>}
@@ -1010,6 +1015,40 @@ function OrdersView({ userEmail }) {
     }
   }
 
+  async function patchAcceptanceOption(orderId, noAcceptanceRequired, noAcceptanceReason) {
+    try {
+      // 与现有 Supabase 保存流程保持一致：先刷新可能已过期的缓存会话，再调用服务端接口。
+      const { data: sessionData, error: sessionError } = await supabase.auth.refreshSession();
+      if (sessionError) throw sessionError;
+      const token = sessionData.session?.access_token;
+      if (!token) throw new Error("请先登录后台账号");
+      const response = await fetch(`/api/orders/${encodeURIComponent(orderId)}/acceptance`, {
+        method: "PATCH",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ noAcceptanceRequired, noAcceptanceReason }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        if (response.status === 401) throw new Error(body.error || "登录已失效");
+        throw new Error(body.error || "保存验收设置失败");
+      }
+      const data = body.data;
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? {
+        ...o,
+        noAcceptanceRequired: data.no_acceptance_required,
+        noAcceptanceReason: data.no_acceptance_reason,
+        noAcceptanceBy: data.no_acceptance_by,
+        noAcceptanceAt: data.no_acceptance_at,
+        updatedAt: data.updated_at,
+      } : o)));
+      setErrorMsg("");
+      return true;
+    } catch (e) {
+      setErrorMsg(e.message || "保存验收设置失败");
+      return false;
+    }
+  }
+
   async function updateStatus(orderId, status, expectedVisitTimeOverride) {
     const order = orders.find((o) => o.id === orderId);
     const now = new Date().toISOString();
@@ -1262,7 +1301,7 @@ function OrdersView({ userEmail }) {
       .filter((order) => getWorklistGroup(order)?.key === group.key)
       .sort((a, b) => {
         if (group.key === "closed") {
-          const exceptionDiff = getOrderExceptions(b, now).length - getOrderExceptions(a, now).length;
+          const exceptionDiff = Number(isMissingAcceptance(b)) - Number(isMissingAcceptance(a));
           if (exceptionDiff !== 0) return exceptionDiff;
         }
         if (group.key === "scheduled") {
@@ -1523,6 +1562,7 @@ function OrdersView({ userEmail }) {
           onSearchStores={searchStores}
           onCreateStore={createStore}
           onPatch={(camel) => patchOrder(selected.id, camel)}
+          onPatchAcceptance={(required, reason) => patchAcceptanceOption(selected.id, required, reason)}
           onSaveQuotes={(items, note) => saveQuotes(selected.id, items, note)}
           onDeleteFeePreset={deleteFeePreset}
           onToggleClientSettled={() => toggleClientSettled(selected)}
@@ -1838,6 +1878,7 @@ function DetailPanel({
   order, orders, technicians, feePresets, technicianFeePresets = [], clients, cities, employees, stores, advances = [],
   onClose, onNavigateToOrder, onUpdateStatus, onAssignTechnician, onAddTechnician,
   onAddFeePreset, onDeleteFeePreset, onAddClient, onAddEmployee, onPatch, onSaveQuotes, onToggleClientSettled,
+  onPatchAcceptance,
   visitFormMode, onOpenNewVisit, onOpenEditVisit, onCancelVisitForm, lockedVisitNotice,
   onAddVisit, onUpdateVisit, onDeleteVisit,
   onCreateExpense, onUpdateExpense, onDeleteExpense, onUnsettleExpense,
@@ -1868,6 +1909,9 @@ function DetailPanel({
   const [completedAt, setCompletedAt] = useState(() => toDateTimeLocal(order.completedAt));
   const [statusHint, setStatusHint] = useState("");
   const [compareUrl, setCompareUrl] = useState(order.comparePhotoUrl || "");
+  const [noAcceptanceRequired, setNoAcceptanceRequired] = useState(order.noAcceptanceRequired === true);
+  const [noAcceptanceReason, setNoAcceptanceReason] = useState(order.noAcceptanceReason || "");
+  const [acceptanceOptionError, setAcceptanceOptionError] = useState("");
   const [editingRelated, setEditingRelated] = useState(false);
 
   useEffect(() => {
@@ -1886,6 +1930,9 @@ function DetailPanel({
     setCompletedAt(toDateTimeLocal(order.completedAt));
     setStatusHint("");
     setCompareUrl(order.comparePhotoUrl || "");
+    setNoAcceptanceRequired(order.noAcceptanceRequired === true);
+    setNoAcceptanceReason(order.noAcceptanceReason || "");
+    setAcceptanceOptionError("");
     setEditingRelated(false);
   }, [order.id]);
 
@@ -2332,6 +2379,49 @@ function DetailPanel({
               <Field label="清洗前后对比照片链接（百度云）">
                 <input style={styles.input} value={compareUrl} onChange={(e) => setCompareUrl(e.target.value)} placeholder="https://…" />
               </Field>
+              <div style={styles.acceptanceOptionBox}>
+                <label style={styles.settlementCheckbox}>
+                  <input
+                    type="checkbox"
+                    checked={noAcceptanceRequired}
+                    disabled={!!order.acceptancePhotoUrl || !!order.acceptanceSignedPdfUrl}
+                    onChange={(event) => {
+                      setNoAcceptanceRequired(event.target.checked);
+                      if (!event.target.checked) setNoAcceptanceReason("");
+                      setAcceptanceOptionError("");
+                    }}
+                  />
+                  不需要验收单
+                </label>
+                {(order.acceptancePhotoUrl || order.acceptanceSignedPdfUrl) && <div style={styles.metaHint}>已有验收单照片或签字验收单，不能选择此项。</div>}
+                {noAcceptanceRequired && (
+                  <>
+                    <textarea
+                      style={{ ...styles.input, minHeight: 72, resize: "vertical" }}
+                      value={noAcceptanceReason}
+                      maxLength={200}
+                      onChange={(event) => setNoAcceptanceReason(event.target.value)}
+                      placeholder="请填写不需要验收单的原因"
+                    />
+                    <div style={styles.metaHint}>{noAcceptanceReason.length}/200</div>
+                  </>
+                )}
+                {acceptanceOptionError && <div style={styles.acceptanceError} role="alert">{acceptanceOptionError}</div>}
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    type="button"
+                    style={styles.smallPrimaryBtn}
+                    onClick={async () => {
+                      if (noAcceptanceRequired && !noAcceptanceReason.trim()) {
+                        setAcceptanceOptionError("请填写不需要验收单的原因");
+                        return;
+                      }
+                      const saved = await onPatchAcceptance(noAcceptanceRequired, noAcceptanceReason);
+                      if (saved) setAcceptanceOptionError("");
+                    }}
+                  >保存验收设置</button>
+                </div>
+              </div>
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
                 <button
                   style={styles.smallPrimaryBtn}
@@ -3307,6 +3397,7 @@ const styles = {
   sectionBlock: { background: "#fff", border: "1px solid #E2E9E8", borderRadius: 10, padding: 12, marginBottom: 14 },
   sectionTitle: { display: "flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 700, color: "#145560", marginBottom: 10 },
   acceptanceUploadBox: { border: "1px dashed #B8CCCA", borderRadius: 8, padding: 10, background: "#F9FBFA" },
+  acceptanceOptionBox: { marginTop: 10, padding: "10px", border: "1px solid #D7E5E3", borderRadius: 8, background: "#F9FBFA" },
   signedPdfBox: { display: "flex", alignItems: "center", gap: 7, marginTop: 10, padding: "9px 10px", border: "1px solid #D7E5E3", borderRadius: 8, background: "#F4F9F8", color: "#145560" },
   signedPdfLink: { color: "#145560", fontSize: 12.5, fontWeight: 600, textDecoration: "none" },
   acceptancePreviewButton: { display: "block", width: "100%", padding: 0, border: "none", background: "transparent", cursor: "zoom-in" },
