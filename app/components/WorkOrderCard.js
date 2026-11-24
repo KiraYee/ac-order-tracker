@@ -1,7 +1,7 @@
 "use client";
 
 import { Clock, Phone, Users } from "lucide-react";
-import { STATUS_STYLE, fmtDate, orderChargeTotal, orderStoreDisplay, orderTechnicianFeeBreakdown, expenseSettlementMeta } from "../../lib/dataHelpers";
+import { STATUS_STYLE, fmtDate, formatStoreLocation, orderChargeTotal, orderStoreDisplay, orderTechnicianFeeBreakdown, expenseSettlementMeta } from "../../lib/dataHelpers";
 import OrderTimeoutNotice from "./OrderTimeoutNotice";
 
 function isUrgentVisit(order, now = Date.now()) {
@@ -58,7 +58,7 @@ export default function WorkOrderCard({
           <div style={styles.locationLine}>
             <span style={styles.ticketNo}>{order.ticketNo || "未编号"}</span>
             <span style={styles.title}>
-              {display.city ? `${display.city} · ` : ""}{display.brand || "未填写品牌方"} · {display.mall || "未填写商场"}
+              {formatStoreLocation(display) || "未填写门店信息"}
             </span>
           </div>
           <div style={styles.topRight}>

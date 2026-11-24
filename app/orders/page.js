@@ -19,7 +19,7 @@ import {
   getOrderExceptions, isMissingAcceptance,
   orderFromDb, visitFromDb, expenseRecordFromDb, orderProfit,
   searchPriceHistory, orderToDbPatch, orderQuoteItems, lineCharge,
-  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianFeeStatusColor, expenseSettlementMeta, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, generateStoreName,
+  itemsChargeTotal, orderChargeTotal, visitCostTotal, orderVisitCostTotal, orderTechnicianCostTotal, orderTechnicianFeeBreakdown, technicianDisplayName, technicianFeeStatusColor, expenseSettlementMeta, costItemAmount, costItemQty, costItemUnitPrice, orderStoreDisplay, formatStoreLocation, generateStoreName,
   ticketNoFromReportTime,
 } from "../../lib/dataHelpers";
 
@@ -280,7 +280,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
     const technicianQuoteTotal = technicianFeeRecords.reduce((sum, record) => sum + (Number(record.amount) || 0), 0);
     const visitTechnicianNames = [];
     for (const visit of order.visits || []) {
-      const name = techById.get(visit.technicianId)?.name || (visit.master || "").trim();
+      const name = technicianDisplayName(visit, technicians);
       if (name && !visitTechnicianNames.includes(name)) visitTechnicianNames.push(name);
     }
     const insuranceFeeTotal = Array.from(expenseRecords.values())
@@ -331,7 +331,7 @@ function exportOrdersWorkbook(orders, technicians, clients, employees, stores, f
     for (const record of records.values()) {
       if (record.type !== "technician_fee") continue;
       const visit = visitById.get(record.visitId);
-      const technicianName = techById.get(record.technicianId)?.name || (visit?.master || "").trim();
+      const technicianName = technicianDisplayName({ ...visit, technicianId: record.technicianId || visit?.technicianId }, technicians);
       const groupKey = `${order.ticketNo || order.id}|${technicianName}|${record.visitId || "order"}`;
       const group = groupedDetails.get(groupKey) || {
         visit,
@@ -526,7 +526,7 @@ async function syncExpenseAdvance(expenseRecord, previousRecord) {
     if (storeError) throw storeError;
     storeName = store?.store_name || "";
   }
-  const location = storeName || [order.city, order.brand, order.mall].filter(Boolean).join(" · ") || "未命名门店";
+  const location = storeName || formatStoreLocation(order) || "未命名门店";
   const typeLabel = expenseRecord.type === "insurance" ? "保险费" : expenseRecord.type === "technician_fee" ? "师傅费用" : "其他费用";
   const reason = `${location} - ${typeLabel}：${expenseRecord.label}`;
   const advanceData = {
@@ -806,30 +806,44 @@ function OrdersView({ userEmail }) {
     } catch (e) { console.error("fetchAdvances failed:", e); }
   }
 
-  async function searchStores(keyword) {
+  async function searchMalls(keyword, cityName) {
     const value = keyword.trim();
-    if (!value) return [];
+    const cityValue = cityName.trim();
+    if (!value || !cityValue) return [];
     const lower = value.toLowerCase();
     const escapedValue = value.replace(/[%_,]/g, (character) => `\\${character}`);
-    const cached = stores.filter((store) => [store.store_name, store.mall, store.brand, store.city]
-      .filter(Boolean)
-      .some((field) => field.toLowerCase().includes(lower)));
+    const cached = stores.filter((store) => store.city === cityValue
+      && (store.mall || "").toLowerCase().includes(lower));
+    const { data, error } = await supabase
+      .from("stores")
+      .select("city, mall")
+      .eq("city", cityValue)
+      .ilike("mall", `%${escapedValue}%`)
+      .order("mall")
+      .limit(100);
+    if (error) throw error;
+    return Array.from(new Set([...cached, ...(data || [])]
+      .map((store) => store.mall)
+      .filter(Boolean)))
+      .sort((a, b) => a.localeCompare(b, "zh-CN"))
+      .slice(0, 20);
+  }
+
+  async function findStore(city, brand, mall) {
     const { data, error } = await supabase
       .from("stores")
       .select("*")
-      .or(`store_name.ilike.%${escapedValue}%,mall.ilike.%${escapedValue}%,brand.ilike.%${escapedValue}%,city.ilike.%${escapedValue}%`)
-      .order("city")
-      .order("brand")
-      .order("mall")
-      .limit(20);
+      .eq("city", city.trim())
+      .eq("brand", brand.trim())
+      .eq("mall", mall.trim())
+      .maybeSingle();
     if (error) throw error;
-    const merged = new Map([...cached, ...(data || [])].map((store) => [store.id, store]));
-    return Array.from(merged.values()).slice(0, 20);
+    return data || null;
   }
 
   async function createStore(data) {
     const row = await findOrCreateStore(supabase, data);
-    setStores((prev) => [...prev, row]);
+    setStores((prev) => prev.some((store) => store.id === row.id) ? prev : [...prev, row]);
     return row;
   }
 
@@ -946,13 +960,7 @@ function OrdersView({ userEmail }) {
         .like("ticket_no", `${reportPrefix}%`);
       if (ticketError) throw ticketError;
       const ticketNo = ticketNoFromReportTime(reportTime, (matchingTickets || []).map((row) => row.ticket_no));
-      const storeIdentity = data.storeId
-        ? null
-        : cityValue && brandValue && mallValue
-          ? await findOrCreateStore(supabase, { city: cityValue, brand: brandValue, mall: mallValue })
-          : null;
-      if (storeIdentity) setStores((prev) => prev.some((store) => store.id === storeIdentity.id) ? prev : [...prev, storeIdentity]);
-      const storeId = data.storeId || storeIdentity?.id || null;
+      const storeId = data.storeId || null;
       const unlinkedStoreWarning = !storeId
         ? "未关联门店，门店信息不会被其他工单复用"
         : "";
@@ -988,7 +996,7 @@ function OrdersView({ userEmail }) {
       if (error) throw error;
       const newOrder = {
         ...orderFromDb({ ...row, visits: [] }),
-        store: stores.find((store) => store.id === storeId) || storeIdentity || null,
+        store: stores.find((store) => store.id === storeId) || null,
       };
       setOrders((prev) => [newOrder, ...prev].sort((a, b) => new Date(b.reportTime) - new Date(a.reportTime)));
       setShowNewOrder(false);
@@ -1559,7 +1567,8 @@ function OrdersView({ userEmail }) {
           onAddFeePreset={addFeePreset}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
-          onSearchStores={searchStores}
+          onSearchStores={searchMalls}
+          onFindStore={findStore}
           onCreateStore={createStore}
           onPatch={(camel) => patchOrder(selected.id, camel)}
           onPatchAcceptance={(required, reason) => patchAcceptanceOption(selected.id, required, reason)}
@@ -1614,7 +1623,8 @@ function OrdersView({ userEmail }) {
           employees={employees}
           onAddClient={(name) => addNamed("clients", name, setClients)}
           onAddEmployee={(name) => addNamed("employees", name, setEmployees)}
-           onSearchStores={searchStores}
+           onSearchStores={searchMalls}
+           onFindStore={findStore}
            onCreateStore={createStore}
         />
       )}
@@ -1671,7 +1681,7 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
             return (
               <>
                 <span style={{ color: m.color }}>● {m.label}</span>
-                <span style={{ color: "#8FA1A8" }}> · {lastVisit.master}</span>
+                <span style={{ color: "#8FA1A8" }}> · {technicianDisplayName(lastVisit, technicians)}</span>
               </>
             );
           })()}
@@ -1681,10 +1691,85 @@ function OrderCard({ order, technicians, clients, now, onClick }) {
   );
 }
 
-function TechnicianPicker({ technicians, valueId, onSelect, onAddTechnician, compact }) {
+function TechnicianPicker({ technicians, valueId, onSelect, onAddTechnician, compact = false, placeholder }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
   const [newPhone, setNewPhone] = useState("");
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const wrapRef = useRef(null);
+  const inputRef = useRef(null);
+  const emptyLabel = placeholder || (compact ? "未指定" : "选择师傅…");
+
+  const cachedTechnicians = useMemo(() => technicians.map((technician) => {
+    const name = technician.name || "";
+    const city = technician.city || "";
+    const searchableText = `${name} ${city}`.toLowerCase();
+    const fullPinyin = pinyin(`${name} ${city}`, { toneType: "none" }).replace(/\s+/g, "").toLowerCase();
+    const initials = pinyin(`${name} ${city}`, { pattern: "first", toneType: "none" }).replace(/\s+/g, "").toLowerCase();
+    return { technician, label: city ? `${name}（${city}）` : name, searchableText, fullPinyin, initials };
+  }), [technicians]);
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredTechnicians = useMemo(() => {
+    if (!normalizedQuery) return cachedTechnicians;
+    return cachedTechnicians.filter(({ searchableText, fullPinyin, initials }) => (
+      searchableText.includes(normalizedQuery)
+      || fullPinyin.includes(normalizedQuery)
+      || initials.includes(normalizedQuery)
+    ));
+  }, [cachedTechnicians, normalizedQuery]);
+  const selectedTechnician = technicians.find((technician) => technician.id === valueId) || null;
+  const selectedLabel = selectedTechnician
+    ? (selectedTechnician.city ? `${selectedTechnician.name}（${selectedTechnician.city}）` : selectedTechnician.name)
+    : emptyLabel;
+
+  useEffect(() => {
+    function handleOutsideClick(event) {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+        setQuery("");
+      }
+    }
+    document.addEventListener("mousedown", handleOutsideClick);
+    return () => document.removeEventListener("mousedown", handleOutsideClick);
+  }, []);
+
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [normalizedQuery]);
+
+  function selectTechnician(technician) {
+    onSelect(technician || null);
+    setQuery("");
+    setOpen(false);
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      setQuery("");
+      return;
+    }
+    if (!open && (event.key === "ArrowDown" || event.key === "Enter")) {
+      event.preventDefault();
+      setOpen(true);
+      return;
+    }
+    if (!open) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setHighlightedIndex((current) => Math.min(current + 1, Math.max(filteredTechnicians.length - 1, 0)));
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setHighlightedIndex((current) => Math.max(current - 1, 0));
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      selectTechnician(filteredTechnicians[highlightedIndex]?.technician || null);
+    }
+  }
   const [newCity, setNewCity] = useState("");
 
   if (adding) {
@@ -1693,49 +1778,46 @@ function TechnicianPicker({ technicians, valueId, onSelect, onAddTechnician, com
         <input style={styles.input} placeholder="师傅姓名" value={newName} onChange={(e) => setNewName(e.target.value)} autoFocus />
         <input style={styles.input} placeholder="城市" value={newCity} onChange={(e) => setNewCity(e.target.value)} />
         <input style={styles.input} placeholder="电话（选填）" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
-        <button
-          style={styles.smallPrimaryBtn}
-          onClick={async () => {
-            if (!newName.trim()) return;
-            const t = await onAddTechnician(newName.trim(), newPhone.trim(), newCity.trim());
-            if (t) {
-              onSelect(t);
-              setAdding(false);
-              setNewName("");
-              setNewPhone("");
-              setNewCity("");
-            }
-          }}
-        >
-          保存
-        </button>
+        <button style={styles.smallPrimaryBtn} onClick={async () => {
+          if (!newName.trim()) return;
+          const t = await onAddTechnician(newName.trim(), newPhone.trim(), newCity.trim());
+          if (t) {
+            onSelect(t);
+            setAdding(false);
+            setNewName("");
+            setNewPhone("");
+            setNewCity("");
+          }
+        }}>保存</button>
         <button style={styles.ghostBtn} onClick={() => setAdding(false)}>取消</button>
       </div>
     );
   }
 
   return (
-    <select
-      style={styles.input}
-      value={valueId || ""}
-      onChange={(e) => {
-        if (e.target.value === "__add__") {
-          setAdding(true);
-          return;
-        }
-        const t = technicians.find((x) => x.id === e.target.value);
-        onSelect(t || null);
-      }}
-    >
-      <option value="">{compact ? "未指定" : "选择师傅…"}</option>
-      {technicians.map((t) => (
-        <option key={t.id} value={t.id}>
-          {t.name}
-          {t.city ? `（${t.city}）` : ""}
-        </option>
-      ))}
-      <option value="__add__">+ 添加新师傅</option>
-    </select>
+    <div ref={wrapRef} style={styles.technicianSelectWrap}>
+      <input
+        ref={inputRef}
+        style={styles.input}
+        value={open ? query : selectedLabel}
+        placeholder={selectedLabel}
+        onFocus={() => { setOpen(true); setQuery(""); }}
+        onChange={(event) => { setQuery(event.target.value); setOpen(true); }}
+        onKeyDown={handleKeyDown}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+      />
+      {open && (
+        <div style={styles.technicianSelectMenu} role="listbox">
+          <button type="button" style={styles.technicianSelectItem} onMouseDown={(event) => event.preventDefault()} onClick={() => selectTechnician(null)}>{emptyLabel}</button>
+          {filteredTechnicians.map(({ technician, label }, index) => (
+            <button type="button" key={technician.id} role="option" aria-selected={technician.id === valueId} style={{ ...styles.technicianSelectItem, ...(index === highlightedIndex ? styles.technicianSelectItemActive : {}) }} onMouseEnter={() => setHighlightedIndex(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => selectTechnician(technician)}>{label}</button>
+          ))}
+          {!filteredTechnicians.length && <div style={styles.searchableEmpty}>没有匹配的师傅</div>}
+          {onAddTechnician && <button type="button" style={styles.technicianSelectCreate} onMouseDown={(event) => event.preventDefault()} onClick={() => { setOpen(false); setQuery(""); setAdding(true); }}>+ 添加新师傅</button>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2013,7 +2095,7 @@ function DetailPanel({
             {store && (
               <Link href={`/stores?open=${encodeURIComponent(store.id)}`} style={styles.storeInfoBox}>
                 <div style={styles.storeInfoTitle}>门店档案</div>
-                <div>{store.city} · {store.brand} · {store.mall} · {store.store_name}</div>
+                <div>{formatStoreLocation(store)} · {store.store_name}</div>
                 {store.address && <div>地址：{store.address}</div>}
                 {store.contact_name && <div>联系人：{store.contact_name}{store.contact_phone ? ` · ${store.contact_phone}` : ""}</div>}
                 {store.special_requirements && <div style={styles.storeWarning}>特殊要求：{store.special_requirements}</div>}
@@ -2262,7 +2344,7 @@ function DetailPanel({
                               )}
                             </div>
                           </div>
-                          <div style={styles.timelineMaster}><Wrench size={12} /> {v.master}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
+                          <div style={styles.timelineMaster}><Wrench size={12} /> {technicianDisplayName(v, technicians)}{v.masterPhone ? ` · ${v.masterPhone}` : ""}</div>
                           <div style={styles.serviceRecordMeta}>服务类型：{v.serviceType || "历史上门记录"}</div>
                           {expenseTotal > 0 && <div style={styles.serviceRecordCost}>本次支出：¥{expenseTotal}</div>}
                           {(v.expenseRecords || []).length > 0 && (
@@ -2870,10 +2952,12 @@ function ExpenseRecordsEditor({ records, onChange, visitId, orderId, employees =
               </select>
             )}
             {fixedType === "insurance" && (
-              <select style={{ ...styles.input, width: 180 }} value={draft.technicianId || ""} onChange={(e) => updateDraft("technicianId", e.target.value || null)}>
-                <option value="">关联师傅（选填）</option>
-                {technicians.map((technician) => <option key={technician.id} value={technician.id}>{technician.name}</option>)}
-              </select>
+              <TechnicianPicker
+                technicians={technicians}
+                valueId={draft.technicianId || null}
+                placeholder="关联师傅（选填）"
+                onSelect={(technician) => updateDraft("technicianId", technician?.id || null)}
+              />
             )}
             <label><input type="checkbox" checked={draft.paymentMethod === "advance" ? true : !!draft.isSettled} disabled={draft.paymentMethod !== "monthly_settlement"} onChange={(e) => updateDraft("isSettled", e.target.checked)} /> 已结清</label>
           </div>
@@ -3021,7 +3105,7 @@ function Field({ label, children }) {
   );
 }
 
-function StoreAutocomplete({ value, stores, onSearch, onSelect, onCreate }) {
+function StoreAutocomplete({ value, disabled, onSearch, onSelect }) {
   const [query, setQuery] = useState(value || "");
   const [results, setResults] = useState([]);
   const [open, setOpen] = useState(false);
@@ -3039,6 +3123,10 @@ function StoreAutocomplete({ value, stores, onSearch, onSelect, onCreate }) {
 
   useEffect(() => {
     const keyword = query.trim();
+    if (disabled) {
+      setResults([]);
+      return undefined;
+    }
     if (!keyword) {
       setResults([]);
       return undefined;
@@ -3057,15 +3145,16 @@ function StoreAutocomplete({ value, stores, onSearch, onSelect, onCreate }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query, onSearch]);
+  }, [disabled, query, onSearch]);
 
   return (
     <div ref={wrapRef} style={styles.searchableWrap}>
       <input
         style={styles.input}
         value={query}
-        placeholder="输入门店名或商场名"
-        onFocus={() => setOpen(true)}
+        disabled={disabled}
+        placeholder={disabled ? "请先选择城市" : "搜索或输入商场名"}
+        onFocus={() => !disabled && setOpen(true)}
         onChange={(event) => {
           setQuery(event.target.value);
           onSelect(null, event.target.value);
@@ -3075,34 +3164,26 @@ function StoreAutocomplete({ value, stores, onSearch, onSelect, onCreate }) {
       {open && query.trim() && (
         <div style={styles.searchableMenu}>
           {loading && <div style={styles.searchableEmpty}>搜索中…</div>}
-          {!loading && results.map((store) => (
-            <button type="button" key={store.id} style={styles.searchableItem} onClick={() => {
-              setQuery(store.store_name || store.mall);
+          {!loading && results.map((mallName) => (
+            <button type="button" key={mallName} style={styles.searchableItem} onClick={() => {
+              setQuery(mallName);
               setOpen(false);
-              onSelect(store);
+              onSelect(mallName);
             }}>
-              <span>{store.city} · {store.brand} · {store.mall} · {store.store_name}</span>
+              <span>{mallName}</span>
             </button>
           ))}
-          {!loading && !results.length && (
-            <button type="button" style={styles.searchableCreate} onClick={() => {
-              setOpen(false);
-              onCreate(query.trim());
-            }}>
-              新建门店：{query.trim()}
-            </button>
-          )}
+          {!loading && !results.length && <div style={styles.searchableEmpty}>暂无匹配商场，可直接使用当前输入</div>}
         </div>
       )}
     </div>
   );
 }
 
-function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], stores = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee, onSearchStores, onCreateStore }) {
+function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technicians = [], cities = [], brands = [], stores = [], onCreateCity, onCreateBrand, onAddTechnician, onAddClient, onAddEmployee, onSearchStores, onFindStore, onCreateStore }) {
   const [city, setCity] = useState("");
   const [mall, setMall] = useState("");
   const [brand, setBrand] = useState("");
-  const [storeName, setStoreName] = useState("");
   const [selectedStore, setSelectedStore] = useState(null);
   const [storeMessage, setStoreMessage] = useState("");
   const [showStoreForm, setShowStoreForm] = useState(false);
@@ -3131,9 +3212,53 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
   const [err, setErr] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  useEffect(() => {
+    let cancelled = false;
+    const cityValue = city.trim();
+    const brandValue = brand.trim();
+    const mallValue = mall.trim();
+    setSelectedStore(null);
+    setStoreMessage("");
+    setShowStoreForm(false);
+    setStoreAddress("");
+    setStoreContactName("");
+    setStoreContactPhone("");
+    setStoreRequirements("");
+    setStoreNotes("");
+    if (!cityValue || !brandValue || !mallValue) return undefined;
+    const timer = setTimeout(async () => {
+      try {
+        const store = await onFindStore(cityValue, brandValue, mallValue);
+        if (cancelled) return;
+        if (store) {
+          setSelectedStore(store);
+          setStoreMessage("已找到历史门店");
+        } else {
+          setSelectedStore(null);
+          setStoreMessage("未找到对应门店，请补充门店档案信息");
+          setShowStoreForm(true);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setSelectedStore(null);
+          setStoreMessage("未找到对应门店，请补充门店档案信息");
+          setShowStoreForm(true);
+        }
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [city, brand, mall]);
+
   async function submit() {
     if (!city.trim() || !mall.trim() || !brand.trim() || !issueDesc.trim()) {
       setErr(!brand.trim() ? "请填写品牌方；品牌方是门店身份的一部分" : "请至少填写城市、商场名称和故障描述");
+      return;
+    }
+    if (!selectedStore) {
+      setErr("请先保存并使用门店");
       return;
     }
     setSubmitting(true);
@@ -3155,7 +3280,6 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
       reportTime: new Date(reportTime).toISOString(),
       relatedOrderId,
       storeId: selectedStore?.id || null,
-      storeName,
     });
     setSubmitting(false);
   }
@@ -3170,32 +3294,24 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
         <div style={styles.modalBody}>
           <div style={styles.newOrderLocationGrid}>
             <Field label="城市">
-              <CityInput value={city} cities={cities} onChange={setCity} onCreate={onCreateCity} />
+              <CityInput value={city} cities={cities} onChange={(value) => {
+                setCity(value);
+                setMall("");
+                setSelectedStore(null);
+                setStoreMessage("");
+                setShowStoreForm(false);
+              }} onCreate={onCreateCity} />
             </Field>
-            <Field label="商场 / 门店 *">
+            <Field label="商场 *">
               <StoreAutocomplete
                 value={mall}
-                stores={stores}
-                onSearch={onSearchStores}
-                onSelect={(store, typedValue) => {
-                  if (!store) {
-                    setSelectedStore(null);
-                    setMall(typedValue || "");
-                    return;
-                  }
-                  setSelectedStore(store);
-                  setCity(store.city || "");
-                  setBrand(store.brand || "");
-                  setMall(store.mall || "");
-                  setStoreName(store.store_name || "");
-                  setStoreMessage(`已选择门店：${store.store_name}`);
-                }}
-                onCreate={(typedName) => {
+                disabled={!city.trim()}
+                onSearch={(keyword) => onSearchStores(keyword, city)}
+                onSelect={(mallName, typedValue) => {
                   setSelectedStore(null);
-                  setMall(typedName);
-                  setStoreName(typedName);
-                  setStoreMessage(`新建门店：${typedName}`);
-                  setShowStoreForm(true);
+                  setStoreMessage("");
+                  setShowStoreForm(false);
+                  setMall(mallName || typedValue || "");
                 }}
               />
             </Field>
@@ -3208,16 +3324,15 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
               <div style={styles.storeMatchTitle}>{storeMessage}</div>
               {selectedStore ? (
                 <>
-                  <div>🏪 {selectedStore.city} · {selectedStore.brand} · {selectedStore.mall} · {selectedStore.store_name}</div>
-                  <input style={styles.input} value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="门店名称" />
-                  {selectedStore.special_requirements && <div style={styles.storeWarning}>⚠️ 门店特殊要求：{selectedStore.special_requirements}</div>}
-                  {selectedStore.notes && <div>备注：{selectedStore.notes}</div>}
-                  <button type="button" style={styles.smallPrimaryBtn} onClick={() => setStoreMessage("已选择历史门店")}>继续使用该门店</button>
+                  <div>🏪 {selectedStore.store_name || `${selectedStore.brand} ${selectedStore.mall}店`}</div>
+                  <div>地址：{selectedStore.address || "—"}</div>
+                  <div>联系人：{selectedStore.contact_name || "—"}</div>
+                  <div>电话：{selectedStore.contact_phone || "—"}</div>
+                  <div>特殊要求：{selectedStore.special_requirements || "—"}</div>
+                  <div>备注：{selectedStore.notes || "—"}</div>
                 </>
               ) : (
                 <>
-                  <input style={styles.input} value={storeName} onChange={(e) => setStoreName(e.target.value)} placeholder="门店名称" />
-                  <button type="button" style={styles.smallPrimaryBtn} onClick={() => setShowStoreForm((value) => !value)}>＋ 新建门店</button>
                   {showStoreForm && (
                     <div style={styles.storeFormBox}>
                       <input style={styles.input} value={storeAddress} onChange={(e) => setStoreAddress(e.target.value)} placeholder="门店地址" />
@@ -3226,9 +3341,9 @@ function NewOrderModal({ onClose, onSubmit, orders, clients, employees, technici
                       <textarea style={styles.input} value={storeRequirements} onChange={(e) => setStoreRequirements(e.target.value)} placeholder="特殊要求" />
                       <textarea style={styles.input} value={storeNotes} onChange={(e) => setStoreNotes(e.target.value)} placeholder="备注" />
                       <button type="button" style={styles.smallPrimaryBtn} onClick={async () => {
-                        if (!city.trim() || !brand.trim() || !mall.trim() || !storeName.trim()) return;
+                        if (!city.trim() || !brand.trim() || !mall.trim()) return;
                         try {
-                          const store = await onCreateStore({ city: city.trim(), brand: brand.trim(), mall: mall.trim(), store_name: storeName.trim(), address: storeAddress.trim() || null, contact_name: storeContactName.trim() || null, contact_phone: storeContactPhone.trim() || null, special_requirements: storeRequirements.trim() || null, notes: storeNotes.trim() || null });
+                          const store = await onCreateStore({ city: city.trim(), brand: brand.trim(), mall: mall.trim(), address: storeAddress.trim() || null, contact_name: storeContactName.trim() || null, contact_phone: storeContactPhone.trim() || null, special_requirements: storeRequirements.trim() || null, notes: storeNotes.trim() || null });
                           setSelectedStore(store);
                           setStoreMessage("已创建并选择门店");
                           setShowStoreForm(false);
@@ -3427,6 +3542,11 @@ const styles = {
   searchableBackdrop: { position: "fixed", inset: 0, border: "none", background: "transparent", zIndex: -1 },
   searchableMenu: { position: "absolute", left: 0, right: 0, top: "calc(100% + 4px)", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, boxShadow: "0 8px 20px rgba(18,32,36,0.12)", overflow: "hidden", zIndex: 4 },
   searchableItem: { width: "100%", display: "flex", justifyContent: "space-between", alignItems: "center", border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", padding: "8px 10px", textAlign: "left", color: "#16262B", fontSize: 12.5 },
+  technicianSelectWrap: { position: "relative", width: "100%", zIndex: 5 },
+  technicianSelectMenu: { position: "absolute", left: 0, right: 0, top: "calc(100% + 4px)", maxHeight: 260, overflowY: "auto", background: "#fff", border: "1px solid #E2E9E8", borderRadius: 8, boxShadow: "0 8px 20px rgba(18,32,36,0.12)", zIndex: 8 },
+  technicianSelectItem: { display: "block", width: "100%", minHeight: 42, padding: "10px 12px", border: "none", borderBottom: "1px solid #F0F3F2", background: "#fff", color: "#16262B", textAlign: "left", fontSize: 13 },
+  technicianSelectItemActive: { background: "#E3F0F1", color: "#145560" },
+  technicianSelectCreate: { display: "block", width: "100%", minHeight: 42, padding: "10px 12px", border: "none", background: "#F4F7F6", color: "#145560", textAlign: "left", fontSize: 13, fontWeight: 600 },
   searchablePinyin: { color: "#8FA1A8", fontSize: 11 },
   searchableCreate: { width: "100%", border: "none", background: "#E3F0F1", color: "#145560", padding: "9px 10px", textAlign: "left", fontSize: 12.5, fontWeight: 600 },
   searchableEmpty: { padding: "9px 10px", color: "#8FA1A8", fontSize: 12 },

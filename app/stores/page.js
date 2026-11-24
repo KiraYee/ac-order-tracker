@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Loader2, MapPin, Pencil, Phone, Store, Trash2, X } from "lucide-react";
 import AppShell from "../components/AppShell";
 import { supabase } from "../../lib/supabaseClient";
-import { fmtDate, generateStoreName, orderFromDb, storeNameWithoutCity, updateStoreForm } from "../../lib/dataHelpers";
+import { fmtDate, formatStoreLocation, generateStoreName, orderFromDb, storeNameWithoutCity, updateStoreForm } from "../../lib/dataHelpers";
 
 export default function StoresPage() {
   return (
@@ -184,7 +184,7 @@ function StoresView() {
                       <div style={styles.storeName}>{storeNameWithoutCity(store.store_name, store.city)}</div>
                       <Pencil size={14} color="#8FA1A8" />
                     </div>
-                    <div style={styles.location}><MapPin size={12} /> {store.brand} · {store.mall}</div>
+                    <div style={styles.location}><MapPin size={12} /> {formatStoreLocation({ mall: store.mall, brand: store.brand })}</div>
                     {store.contact_phone && <div className="store-card-phone"><Phone size={12} /><a className="phone-link" href={`tel:${store.contact_phone}`} onClick={(e) => e.stopPropagation()}>{store.contact_phone}</a></div>}
                     <div style={styles.statsRow}>
                       <span>最近服务：{recentServiceTime ? fmtDate(recentServiceTime) : "暂无"}</span>
